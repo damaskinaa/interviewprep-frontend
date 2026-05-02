@@ -278,10 +278,12 @@ export default function Home() {
         <div className="relative mx-auto max-w-[1500px]">
           <nav className="flex items-center justify-between border-b border-white/10 pb-6">
             <div>
-              <p className="text-2xl font-semibold tracking-[0.24em] text-white">
-                NAILIT
-              </p>
-              <p className="mt-1 text-sm text-white/40">
+              <img
+                src="/nailit-logo-final.png?v=2"
+                alt="Nailit"
+                className="h-10 w-auto object-contain"
+              />
+              <p className="mt-2 text-sm text-white/40">
                 Interview strategy for people who want the offer.
               </p>
             </div>
