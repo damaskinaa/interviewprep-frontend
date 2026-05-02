@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 
+export const runtime = "nodejs";
+export const maxDuration = 300;
+
 export async function POST(request: Request) {
   try {
     const backendUrl = process.env.BACKEND_URL;
@@ -28,19 +31,44 @@ export async function POST(request: Request) {
     });
 
     const text = await response.text();
+    const contentType = response.headers.get("content-type") || "";
+
+    if (!response.ok) {
+      return NextResponse.json(
+        {
+          error: "Backend returned an error",
+          status: response.status,
+          body: text.slice(0, 2000),
+        },
+        { status: response.status }
+      );
+    }
+
+    if (!contentType.includes("application/json")) {
+      return NextResponse.json(
+        {
+          error: "Backend returned non JSON response",
+          status: response.status,
+          body: text.slice(0, 2000),
+        },
+        { status: 502 }
+      );
+    }
 
     let data;
     try {
-      data = text ? JSON.parse(text) : { error: "Backend returned empty response" };
+      data = JSON.parse(text);
     } catch {
-      data = {
-        error: "Backend returned non JSON response",
-        status: response.status,
-        body: text.slice(0, 1000),
-      };
+      return NextResponse.json(
+        {
+          error: "Backend JSON could not be parsed",
+          body: text.slice(0, 2000),
+        },
+        { status: 502 }
+      );
     }
 
-    return NextResponse.json(data, { status: response.status });
+    return NextResponse.json(data);
   } catch (err: any) {
     return NextResponse.json(
       {
