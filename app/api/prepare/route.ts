@@ -3,10 +3,18 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
+function normalizeBackendUrl(value: string) {
+  return value
+    .trim()
+    .replace(/\/+$/, "")
+    .replace(/\/prepare$/, "");
+}
+
 export async function POST(request: Request) {
   try {
-    const backendUrl = process.env.BACKEND_URL;
+    const rawBackendUrl = process.env.BACKEND_URL || "";
     const appApiKey = process.env.APP_API_KEY;
+    const backendUrl = normalizeBackendUrl(rawBackendUrl);
 
     if (!backendUrl || !appApiKey) {
       return NextResponse.json(
@@ -20,8 +28,9 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
+    const targetUrl = `${backendUrl}/prepare`;
 
-    const response = await fetch(`${backendUrl}/prepare`, {
+    const response = await fetch(targetUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -38,6 +47,8 @@ export async function POST(request: Request) {
         {
           error: "Backend returned an error",
           status: response.status,
+          backendUrlUsed: backendUrl,
+          targetUrlUsed: targetUrl,
           body: text.slice(0, 2000),
         },
         { status: response.status }
@@ -49,25 +60,15 @@ export async function POST(request: Request) {
         {
           error: "Backend returned non JSON response",
           status: response.status,
+          backendUrlUsed: backendUrl,
+          targetUrlUsed: targetUrl,
           body: text.slice(0, 2000),
         },
         { status: 502 }
       );
     }
 
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      return NextResponse.json(
-        {
-          error: "Backend JSON could not be parsed",
-          body: text.slice(0, 2000),
-        },
-        { status: 502 }
-      );
-    }
-
+    const data = JSON.parse(text);
     return NextResponse.json(data);
   } catch (err: any) {
     return NextResponse.json(
