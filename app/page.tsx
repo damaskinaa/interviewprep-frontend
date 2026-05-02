@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 type Result = {
   status?: string;
@@ -17,12 +17,154 @@ type UploadState = {
   warning: string;
 };
 
+type PackSection = {
+  title: string;
+  content: string;
+};
+
+function splitPack(markdown: string): PackSection[] {
+  const lines = markdown.split("\n");
+  const sections: PackSection[] = [];
+  let currentTitle = "Executive summary";
+  let currentLines: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith("## ")) {
+      if (currentLines.join("\n").trim()) {
+        sections.push({
+          title: currentTitle,
+          content: currentLines.join("\n").trim(),
+        });
+      }
+
+      currentTitle = line.replace(/^##\s+/, "").trim();
+      currentLines = [];
+      continue;
+    }
+
+    if (!line.startsWith("# Interview Prep Pack")) {
+      currentLines.push(line);
+    }
+  }
+
+  if (currentLines.join("\n").trim()) {
+    sections.push({
+      title: currentTitle,
+      content: currentLines.join("\n").trim(),
+    });
+  }
+
+  return sections.filter((section) => section.content.trim());
+}
+
+function prettyTitle(title: string) {
+  return title
+    .replace(/And/g, "and")
+    .replace(/Json/g, "JSON")
+    .replace(/Cv/g, "CV")
+    .replace(/Lua/g, "Lua");
+}
+
+function RenderSection({ content }: { content: string }) {
+  const lines = content.split("\n");
+  let inCode = false;
+
+  return (
+    <div className="space-y-4">
+      {lines.map((rawLine, index) => {
+        const line = rawLine.trim();
+
+        if (!line) {
+          return <div key={index} className="h-2" />;
+        }
+
+        if (line.startsWith("```")) {
+          inCode = !inCode;
+          return null;
+        }
+
+        if (inCode) {
+          return (
+            <pre
+              key={index}
+              className="overflow-auto rounded-2xl border border-white/10 bg-black/60 p-4 text-sm leading-7 text-white/70"
+            >
+              {line}
+            </pre>
+          );
+        }
+
+        if (line.startsWith("### ")) {
+          return (
+            <h3
+              key={index}
+              className="pt-4 text-xl font-semibold tracking-[-0.03em] text-white"
+            >
+              {line.replace(/^###\s+/, "")}
+            </h3>
+          );
+        }
+
+        if (line.startsWith("#### ")) {
+          return (
+            <h4
+              key={index}
+              className="pt-3 text-lg font-semibold tracking-[-0.02em] text-[#f2dfb8]"
+            >
+              {line.replace(/^####\s+/, "")}
+            </h4>
+          );
+        }
+
+        if (/^\d+\.\s+/.test(line)) {
+          return (
+            <div
+              key={index}
+              className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-white/78"
+            >
+              {line}
+            </div>
+          );
+        }
+
+        if (line.startsWith("- ") || line.startsWith("* ")) {
+          return (
+            <div key={index} className="flex gap-3 text-white/75">
+              <span className="mt-3 h-1.5 w-1.5 rounded-full bg-[#c9a96a]" />
+              <p className="leading-8">{line.slice(2)}</p>
+            </div>
+          );
+        }
+
+        if (line.startsWith("{") || line.startsWith("}") || line.includes('":')) {
+          return (
+            <pre
+              key={index}
+              className="overflow-auto rounded-xl bg-black/40 px-4 py-2 text-xs leading-6 text-white/45"
+            >
+              {line}
+            </pre>
+          );
+        }
+
+        return (
+          <p key={index} className="leading-8 text-white/75">
+            {line}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function Home() {
   const [companyName, setCompanyName] = useState("Google");
   const [roleName, setRoleName] = useState("Program Manager");
   const [jobDescription, setJobDescription] = useState("");
   const [cv, setCv] = useState("");
-  const [extra, setExtra] = useState("Create a detailed interview prep pack and Lua mock interview brief. Use exact evidence from the CV and job description. Avoid generic advice.");
+  const [extra, setExtra] = useState(
+    "Create a detailed interview prep pack and Lua mock interview brief. Use exact evidence from the CV, job description, and answer bank. Avoid generic advice."
+  );
   const [jobUpload, setJobUpload] = useState<UploadState | null>(null);
   const [cvUpload, setCvUpload] = useState<UploadState | null>(null);
   const [extraUpload, setExtraUpload] = useState<UploadState | null>(null);
@@ -30,6 +172,11 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState("");
+  const [activeSection, setActiveSection] = useState("");
+
+  const sections = useMemo(() => splitPack(result?.markdown || ""), [result?.markdown]);
+  const currentSection =
+    sections.find((section) => section.title === activeSection) || sections[0];
 
   async function extractIntoTextarea(
     file: File,
@@ -76,6 +223,7 @@ export default function Home() {
     setLoading(true);
     setError("");
     setResult(null);
+    setActiveSection("");
 
     try {
       const res = await fetch("/api/prepare", {
@@ -95,7 +243,12 @@ export default function Home() {
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data?.error || data?.detail || "Backend returned an error");
+        const detail =
+          typeof data?.detail === "string"
+            ? data.detail
+            : data?.body || data?.message || JSON.stringify(data?.detail || data);
+
+        throw new Error(`${data?.error || "Request failed"}: ${detail}`);
       }
 
       setResult(data);
@@ -104,6 +257,14 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function cleanPastedText(value: string) {
+    return value
+      .replace(/\r/g, "\n")
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/\n{4,}/g, "\n\n\n")
+      .trim();
   }
 
   const canSubmit = companyName.trim() && roleName.trim() && jobDescription.trim() && cv.trim();
@@ -117,8 +278,8 @@ export default function Home() {
         <div className="relative mx-auto max-w-[1500px]">
           <nav className="flex items-center justify-between border-b border-white/10 pb-6">
             <div>
-              <p className="text-2xl font-semibold tracking-[-0.04em] text-white">
-                Nailit
+              <p className="text-2xl font-semibold tracking-[0.24em] text-white">
+                NAILIT
               </p>
               <p className="mt-1 text-sm text-white/40">
                 Interview strategy for people who want the offer.
@@ -144,7 +305,7 @@ export default function Home() {
 
             <div className="max-w-2xl lg:ml-auto">
               <p className="text-lg leading-8 text-white/55">
-                Upload or paste the role and your CV. Nailit extracts the text first so you can review it before generating.
+                Upload or paste the role, your CV, and your answer bank. Nailit extracts the text first so you can review it before generating.
               </p>
 
               <div className="mt-6 grid gap-3 sm:grid-cols-3">
@@ -205,6 +366,15 @@ export default function Home() {
                         extractIntoTextarea(file, jobDescription, setJobDescription, setJobUpload, "job")
                       }
                     />
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setJobDescription(cleanPastedText(jobDescription))}
+                        className="rounded-xl border border-white/10 px-3 py-2 text-xs text-white/55 hover:text-white"
+                      >
+                        Clean text
+                      </button>
+                    </div>
                     <textarea
                       className="textarea min-h-[520px]"
                       value={jobDescription}
@@ -224,6 +394,15 @@ export default function Home() {
                         extractIntoTextarea(file, cv, setCv, setCvUpload, "cv")
                       }
                     />
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setCv(cleanPastedText(cv))}
+                        className="rounded-xl border border-white/10 px-3 py-2 text-xs text-white/55 hover:text-white"
+                      >
+                        Clean text
+                      </button>
+                    </div>
                     <textarea
                       className="textarea min-h-[520px]"
                       value={cv}
@@ -232,20 +411,29 @@ export default function Home() {
                     />
                   </Field>
 
-                  <Field label="Extra context">
+                  <Field label="Answer bank or extra context">
                     <FileUpload
-                      label="Upload extra context"
+                      label="Upload answer bank"
                       upload={extraUpload}
                       busy={extracting === "extra"}
                       onFile={(file) =>
                         extractIntoTextarea(file, extra, setExtra, setExtraUpload, "extra")
                       }
                     />
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setExtra(cleanPastedText(extra))}
+                        className="rounded-xl border border-white/10 px-3 py-2 text-xs text-white/55 hover:text-white"
+                      >
+                        Clean text
+                      </button>
+                    </div>
                     <textarea
-                      className="textarea min-h-[160px]"
+                      className="textarea min-h-[260px]"
                       value={extra}
                       onChange={(e) => setExtra(e.target.value)}
-                      placeholder="Add concerns, interview style, seniority, or company notes"
+                      placeholder="Paste prepared answers, interview stories, notes, concerns, or company context"
                     />
                   </Field>
                 </div>
@@ -261,7 +449,7 @@ export default function Home() {
 
           {result && (
             <section className="py-10">
-              <div className="rounded-[2rem] border border-[#c9a96a]/20 bg-[#c9a96a]/[0.06] p-5 md:p-8">
+              <div className="rounded-[2rem] border border-[#c9a96a]/20 bg-[#0b0905] p-5 md:p-8">
                 <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
                   <div>
                     <p className="text-sm uppercase tracking-[0.3em] text-[#c9a96a]">
@@ -287,25 +475,44 @@ export default function Home() {
                   )}
                 </div>
 
-                {result.markdown && (
-                  <div className="mt-8 grid gap-5 xl:grid-cols-[320px_1fr]">
-                    <aside className="rounded-3xl border border-white/10 bg-black/30 p-6">
-                      <p className="text-sm font-semibold text-white">Inside this pack</p>
-                      <div className="mt-5 space-y-4 text-sm text-white/50">
-                        <p>Executive interview strategy</p>
-                        <p>Role and CV analysis</p>
-                        <p>Candidate risks and repairs</p>
-                        <p>Likely interview questions</p>
-                        <p>Story bank</p>
-                        <p>Seven day prep plan</p>
-                        <p>Lua mock interview brief</p>
+                {sections.length > 0 && currentSection && (
+                  <div className="mt-8 grid gap-5 xl:grid-cols-[340px_1fr]">
+                    <aside className="rounded-3xl border border-white/10 bg-black/30 p-4">
+                      <p className="px-3 pb-3 text-sm font-semibold text-white">
+                        Inside this pack
+                      </p>
+
+                      <div className="space-y-2">
+                        {sections.map((section) => {
+                          const selected = section.title === currentSection.title;
+
+                          return (
+                            <button
+                              key={section.title}
+                              onClick={() => setActiveSection(section.title)}
+                              className={`w-full rounded-2xl px-4 py-3 text-left text-sm transition ${
+                                selected
+                                  ? "bg-[#c9a96a]/15 text-[#f5e6c8]"
+                                  : "text-white/45 hover:bg-white/[0.04] hover:text-white"
+                              }`}
+                            >
+                              {prettyTitle(section.title)}
+                            </button>
+                          );
+                        })}
                       </div>
                     </aside>
 
                     <article className="rounded-3xl border border-white/10 bg-[#080808] p-6 md:p-9">
-                      <pre className="max-h-[820px] overflow-auto whitespace-pre-wrap font-sans text-[15px] leading-8 text-white/82">
-                        {result.markdown}
-                      </pre>
+                      <p className="text-sm uppercase tracking-[0.28em] text-[#c9a96a]">
+                        Section
+                      </p>
+                      <h3 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-white">
+                        {prettyTitle(currentSection.title)}
+                      </h3>
+                      <div className="mt-8 max-h-[820px] overflow-auto pr-4">
+                        <RenderSection content={currentSection.content} />
+                      </div>
                     </article>
                   </div>
                 )}
