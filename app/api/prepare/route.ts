@@ -3,18 +3,20 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-function normalizeBackendUrl(value: string) {
-  return value
-    .trim()
+function buildPrepareUrl(rawBackendUrl: string) {
+  const url = new URL(rawBackendUrl.trim());
+  const cleanPath = url.pathname
     .replace(/\/+$/, "")
     .replace(/\/prepare$/, "");
+
+  url.pathname = `${cleanPath}/prepare`;
+  return url.toString();
 }
 
 export async function POST(request: Request) {
   try {
-    const rawBackendUrl = process.env.BACKEND_URL || "";
+    const backendUrl = process.env.BACKEND_URL;
     const appApiKey = process.env.APP_API_KEY;
-    const backendUrl = normalizeBackendUrl(rawBackendUrl);
 
     if (!backendUrl || !appApiKey) {
       return NextResponse.json(
@@ -28,7 +30,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const targetUrl = `${backendUrl}/prepare`;
+    const targetUrl = buildPrepareUrl(backendUrl);
 
     const response = await fetch(targetUrl, {
       method: "POST",
@@ -37,6 +39,7 @@ export async function POST(request: Request) {
         "X-App-Key": appApiKey,
       },
       body: JSON.stringify(body),
+      cache: "no-store",
     });
 
     const text = await response.text();
@@ -47,8 +50,6 @@ export async function POST(request: Request) {
         {
           error: "Backend returned an error",
           status: response.status,
-          backendUrlUsed: backendUrl,
-          targetUrlUsed: targetUrl,
           body: text.slice(0, 2000),
         },
         { status: response.status }
@@ -60,16 +61,13 @@ export async function POST(request: Request) {
         {
           error: "Backend returned non JSON response",
           status: response.status,
-          backendUrlUsed: backendUrl,
-          targetUrlUsed: targetUrl,
           body: text.slice(0, 2000),
         },
         { status: 502 }
       );
     }
 
-    const data = JSON.parse(text);
-    return NextResponse.json(data);
+    return NextResponse.json(JSON.parse(text));
   } catch (err: any) {
     return NextResponse.json(
       {
