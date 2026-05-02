@@ -49,14 +49,7 @@ async function getDaytonaPreview() {
     throw new Error(`Daytona preview lookup failed: ${response.status} ${text.slice(0, 500)}`);
   }
 
-  let data: DaytonaPreviewResponse;
-
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new Error(`Daytona preview lookup returned non JSON: ${text.slice(0, 500)}`);
-  }
-
+  const data: DaytonaPreviewResponse = JSON.parse(text);
   const previewUrl = getValue(data, "url");
   const previewToken = getValue(data, "token");
 
@@ -64,10 +57,117 @@ async function getDaytonaPreview() {
     throw new Error(`Daytona preview response did not include url and token: ${text.slice(0, 500)}`);
   }
 
-  return {
-    previewUrl,
-    previewToken,
-  };
+  return { previewUrl, previewToken };
+}
+
+function researchQueries(company: string, role: string) {
+  return [
+    `${company} official careers interview tips how we hire values`,
+    `${company} official company culture values principles hiring process`,
+    `${company} ${role} interview process questions experience`,
+    `${company} ${role} interview preparation behavioral technical rounds`,
+    `${company} ${role} Glassdoor interview questions experience`,
+    `site:reddit.com ${company} ${role} interview experience questions`,
+    `site:youtube.com ${company} ${role} interview preparation questions`,
+  ];
+}
+
+async function tavilySearch(query: string) {
+  const key = process.env.TAVILY_API_KEY;
+
+  if (!key) return [];
+
+  const response = await fetch("https://api.tavily.com/search", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      query,
+      max_results: 5,
+      search_depth: "advanced",
+      include_answer: true,
+      include_raw_content: false,
+    }),
+    cache: "no-store",
+  });
+
+  const text = await response.text();
+
+  if (!response.ok) {
+    return [
+      {
+        title: `Tavily failed for query: ${query}`,
+        url: "tavily_error",
+        content: text.slice(0, 500),
+      },
+    ];
+  }
+
+  const data = JSON.parse(text);
+
+  const rows = [];
+
+  if (data.answer) {
+    rows.push({
+      title: `Search answer: ${query}`,
+      url: "tavily_answer",
+      content: data.answer,
+    });
+  }
+
+  for (const item of data.results || []) {
+    rows.push({
+      title: item.title || "",
+      url: item.url || "",
+      content: item.content || "",
+    });
+  }
+
+  return rows;
+}
+
+async function buildExternalResearch(company: string, role: string) {
+  const seen = new Set<string>();
+  const chunks: string[] = [];
+
+  for (const query of researchQueries(company, role)) {
+    const results = await tavilySearch(query);
+
+    for (const item of results) {
+      const key = `${item.url}|${item.title}`;
+
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      if (!item.content || item.content.length < 80) continue;
+
+      chunks.push(
+        [
+          `QUERY: ${query}`,
+          `TITLE: ${item.title}`,
+          `URL: ${item.url}`,
+          `CONTENT: ${item.content}`,
+        ].join("\n")
+      );
+    }
+  }
+
+  if (!chunks.length) {
+    return "";
+  }
+
+  return `
+[NAILIT_EXTERNAL_RESEARCH]
+This research was collected by the Vercel API route before calling Daytona.
+Use it as company and interview intelligence.
+Treat official company sources as highest confidence.
+Treat Reddit, Glassdoor, YouTube, blogs, and forums as directional public candidate experience themes.
+
+${chunks.join("\n\n---\n\n").slice(0, 45000)}
+[/NAILIT_EXTERNAL_RESEARCH]
+`.trim();
 }
 
 export async function POST(request: Request) {
@@ -85,6 +185,19 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
+
+    const externalResearch = await buildExternalResearch(
+      body.company_name || "",
+      body.role_name || ""
+    );
+
+    const enrichedBody = {
+      ...body,
+      extra: externalResearch
+        ? `${body.extra || ""}\n\n${externalResearch}`
+        : body.extra || "",
+    };
+
     const { previewUrl, previewToken } = await getDaytonaPreview();
     const targetUrl = buildPrepareUrl(previewUrl);
 
@@ -96,7 +209,7 @@ export async function POST(request: Request) {
         "x-daytona-preview-token": previewToken,
         "X-Daytona-Skip-Preview-Warning": "true",
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(enrichedBody),
       cache: "no-store",
     });
 
