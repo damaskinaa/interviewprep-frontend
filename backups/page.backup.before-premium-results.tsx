@@ -65,154 +65,97 @@ function prettyTitle(title: string) {
     .replace(/Lua/g, "Lua");
 }
 
-function sectionTone(title: string) {
-  const t = title.toLowerCase();
-
-  if (t.includes("risk") || t.includes("gap")) return "Risk";
-  if (t.includes("question") || t.includes("answer")) return "Practice";
-  if (t.includes("source") || t.includes("research")) return "Evidence";
-  if (t.includes("strategy") || t.includes("signal")) return "Strategy";
-  if (t.includes("story")) return "Stories";
-  if (t.includes("plan") || t.includes("checklist")) return "Plan";
-
-  return "Brief";
-}
-
-function formatInline(text: string) {
-  return text
-    .replace(/\*\*/g, "")
-    .replace(/^[-*]\s+/, "")
-    .trim();
-}
-
-function parseSectionBlocks(content: string) {
+function RenderSection({ content }: { content: string }) {
   const lines = content.split("\n");
-  const blocks: { kind: string; text: string }[] = [];
-  let paragraph: string[] = [];
-
-  function flushParagraph() {
-    const text = paragraph.join(" ").trim();
-    if (text) blocks.push({ kind: "paragraph", text });
-    paragraph = [];
-  }
-
-  for (const raw of lines) {
-    const line = raw.trim();
-
-    if (!line) {
-      flushParagraph();
-      continue;
-    }
-
-    if (line.startsWith("### ")) {
-      flushParagraph();
-      blocks.push({ kind: "h3", text: line.replace(/^###\s+/, "").trim() });
-      continue;
-    }
-
-    if (line.startsWith("#### ")) {
-      flushParagraph();
-      blocks.push({ kind: "h4", text: line.replace(/^####\s+/, "").trim() });
-      continue;
-    }
-
-    if (/^\d+\.\s+/.test(line)) {
-      flushParagraph();
-      blocks.push({ kind: "numbered", text: line.replace(/^\d+\.\s+/, "").trim() });
-      continue;
-    }
-
-    if (line.startsWith("- ") || line.startsWith("* ")) {
-      flushParagraph();
-      blocks.push({ kind: "bullet", text: formatInline(line) });
-      continue;
-    }
-
-    if (line.startsWith("{") || line.startsWith("}") || line.includes('":')) {
-      flushParagraph();
-      blocks.push({ kind: "code", text: line });
-      continue;
-    }
-
-    paragraph.push(formatInline(line));
-  }
-
-  flushParagraph();
-  return blocks;
-}
-
-function RenderSection({ title, content }: { title: string; content: string }) {
-  const blocks = parseSectionBlocks(content);
-  const tone = sectionTone(title);
+  let inCode = false;
 
   return (
-    <article className="overflow-hidden rounded-[2rem] border border-white/10 bg-[#0b0b0a]/80 shadow-2xl shadow-black/30">
-      <div className="border-b border-white/10 bg-white/[0.025] px-6 py-5 sm:px-8">
-        <div className="mb-3 inline-flex rounded-full border border-[#c9a96a]/25 bg-[#c9a96a]/10 px-3 py-1 text-[11px] uppercase tracking-[0.28em] text-[#f2dfb8]/80">
-          {tone}
-        </div>
-        <h2 className="text-3xl font-semibold tracking-[-0.055em] text-white sm:text-4xl">
-          {prettyTitle(title)}
-        </h2>
-      </div>
+    <div className="space-y-4">
+      {lines.map((rawLine, index) => {
+        const line = rawLine.trim();
 
-      <div className="space-y-4 px-6 py-7 sm:px-8">
-        {blocks.map((block, index) => {
-          if (block.kind === "h3") {
-            return (
-              <h3 key={index} className="pt-4 text-xl font-semibold tracking-[-0.035em] text-white">
-                {block.text}
-              </h3>
-            );
-          }
+        if (!line) {
+          return <div key={index} className="h-2" />;
+        }
 
-          if (block.kind === "h4") {
-            return (
-              <h4 key={index} className="pt-2 text-base font-semibold tracking-[-0.02em] text-[#f2dfb8]">
-                {block.text}
-              </h4>
-            );
-          }
+        if (line.startsWith("```")) {
+          inCode = !inCode;
+          return null;
+        }
 
-          if (block.kind === "numbered") {
-            return (
-              <div key={index} className="group rounded-2xl border border-white/10 bg-white/[0.035] p-4 transition hover:border-[#c9a96a]/30 hover:bg-white/[0.055]">
-                <div className="mb-2 text-[10px] uppercase tracking-[0.28em] text-white/35">
-                  Point {index + 1}
-                </div>
-                <p className="leading-8 text-white/78">{block.text}</p>
-              </div>
-            );
-          }
-
-          if (block.kind === "bullet") {
-            return (
-              <div key={index} className="flex gap-3 rounded-2xl bg-white/[0.02] px-4 py-3">
-                <span className="mt-3 h-1.5 w-1.5 shrink-0 rounded-full bg-[#c9a96a]" />
-                <p className="leading-8 text-white/76">{block.text}</p>
-              </div>
-            );
-          }
-
-          if (block.kind === "code") {
-            return (
-              <pre key={index} className="overflow-auto rounded-2xl border border-white/10 bg-black/50 p-4 text-xs leading-6 text-white/50">
-                {block.text}
-              </pre>
-            );
-          }
-
+        if (inCode) {
           return (
-            <p key={index} className="leading-8 text-white/74">
-              {block.text}
-            </p>
+            <pre
+              key={index}
+              className="overflow-auto rounded-2xl border border-white/10 bg-black/60 p-4 text-sm leading-7 text-white/70"
+            >
+              {line}
+            </pre>
           );
-        })}
-      </div>
-    </article>
+        }
+
+        if (line.startsWith("### ")) {
+          return (
+            <h3
+              key={index}
+              className="pt-4 text-xl font-semibold tracking-[-0.03em] text-white"
+            >
+              {line.replace(/^###\s+/, "")}
+            </h3>
+          );
+        }
+
+        if (line.startsWith("#### ")) {
+          return (
+            <h4
+              key={index}
+              className="pt-3 text-lg font-semibold tracking-[-0.02em] text-[#f2dfb8]"
+            >
+              {line.replace(/^####\s+/, "")}
+            </h4>
+          );
+        }
+
+        if (/^\d+\.\s+/.test(line)) {
+          return (
+            <div
+              key={index}
+              className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-white/78"
+            >
+              {line}
+            </div>
+          );
+        }
+
+        if (line.startsWith("- ") || line.startsWith("* ")) {
+          return (
+            <div key={index} className="flex gap-3 text-white/75">
+              <span className="mt-3 h-1.5 w-1.5 rounded-full bg-[#c9a96a]" />
+              <p className="leading-8">{line.slice(2)}</p>
+            </div>
+          );
+        }
+
+        if (line.startsWith("{") || line.startsWith("}") || line.includes('":')) {
+          return (
+            <pre
+              key={index}
+              className="overflow-auto rounded-xl bg-black/40 px-4 py-2 text-xs leading-6 text-white/45"
+            >
+              {line}
+            </pre>
+          );
+        }
+
+        return (
+          <p key={index} className="leading-8 text-white/75">
+            {line}
+          </p>
+        );
+      })}
+    </div>
   );
 }
-
 
 export default function Home() {
   const [companyName, setCompanyName] = useState("Google");
@@ -570,7 +513,7 @@ export default function Home() {
                         {prettyTitle(currentSection.title)}
                       </h3>
                       <div className="mt-8 max-h-[820px] overflow-auto pr-4">
-                        <RenderSection title={currentSection.title} content={currentSection.content} />
+                        <RenderSection content={currentSection.content} />
                       </div>
                     </article>
                   </div>
