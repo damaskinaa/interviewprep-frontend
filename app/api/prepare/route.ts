@@ -109,7 +109,7 @@ function cleanContent(value: string) {
     .replace(/\s+/g, " ")
     .replace(/[\u0000-\u001F\u007F]/g, " ")
     .trim()
-    .slice(0, 2500);
+    .slice(0, 1400);
 }
 
 function researchQueries(company: string, role: string) {
@@ -120,33 +120,19 @@ function researchQueries(company: string, role: string) {
     `${c} official careers interview tips`,
     `${c} official how we hire interview process`,
     `${c} official hiring process interview`,
-    `${c} official values culture principles`,
     `${c} careers ${r} responsibilities requirements`,
     `${c} ${r} interview process`,
-    `${c} ${r} interview questions`,
-    `${c} ${r} interview experience`,
-    `${c} ${r} behavioral interview`,
-    `${c} ${r} execution interview`,
-    `${c} ${r} stakeholder interview`,
-    `${c} ${r} leadership interview`,
-    `${c} ${r} hiring manager interview`,
-    `${c} ${r} recruiter screen`,
-    `${c} ${r} cross functional interview`,
-    `${c} ${r} role expectations`,
+    `${c} ${r} interview questions experience`,
+    `${c} ${r} behavioral execution stakeholder interview`,
+    `${c} ${r} hiring manager recruiter screen`,
     `${c} program manager execution stakeholder metrics change management`,
-    `${c} program manager data driven decisions process improvement`,
     `${c} global network delivery program manager`,
     `${c} network infrastructure program manager`,
     `${c} data center network delivery program manager`,
     `site:reddit.com ${c} ${r} interview experience`,
-    `site:reddit.com ${c} program manager interview`,
     `site:glassdoor.com ${c} ${r} interview questions`,
-    `site:glassdoor.com ${c} program manager interview`,
-    `site:youtube.com ${c} ${r} interview`,
-    `site:youtube.com ${c} program manager interview prep`,
-    `site:levels.fyi ${c} ${r} interview`,
-    `site:teamblind.com ${c} ${r} interview`,
-    `site:interviewing.io ${c} ${r} interview`
+    `site:youtube.com ${c} ${r} interview prep`,
+    `site:teamblind.com ${c} ${r} interview`
   ];
 }
 
@@ -163,7 +149,7 @@ async function tavilySearch(query: string): Promise<ResearchRow[]> {
     },
     body: JSON.stringify({
       query,
-      max_results: 8,
+      max_results: 4,
       search_depth: "advanced",
       include_answer: false,
       include_raw_content: false,
@@ -220,7 +206,7 @@ async function buildExternalResearch(company: string, role: string) {
 
   const sorted = rows
     .sort((a, b) => b.confidence - a.confidence || b.content.length - a.content.length)
-    .slice(0, 70);
+    .slice(0, 36);
 
   if (!sorted.length) return "";
 
@@ -252,7 +238,7 @@ Do not describe directional public themes as official facts.
 Do not invent exact interview rounds unless supported by official or repeated public evidence.
 Prefer role specific evidence over generic company commentary.
 
-${chunks.join("\n\n---\n\n").slice(0, 65000)}
+${chunks.join("\n\n---\n\n").slice(0, 38000)}
 [/NAILIT_EXTERNAL_RESEARCH]
 `.trim();
 }
