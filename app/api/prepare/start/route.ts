@@ -189,8 +189,6 @@ function importantRoleTokens(role: string) {
 }
 
 function isRelevantSource(row: SearchResult, company: string, role: string, sourceType: SourceType) {
-  if (sourceType === "official_company_source") return true;
-
   const companySlug = normalizeCompany(company);
   const host = safeHost(row.url);
   const sourceText = `${row.title} ${row.snippet} ${row.url}`.toLowerCase();
@@ -203,6 +201,15 @@ function isRelevantSource(row: SearchResult, company: string, role: string, sour
     sourceText.includes("hiring") ||
     sourceText.includes("how we hire") ||
     sourceText.includes("recruit");
+  const hasValuesSignal =
+    sourceText.includes("values") ||
+    sourceText.includes("commitments") ||
+    sourceText.includes("culture") ||
+    sourceText.includes("principles");
+
+  if (sourceType === "official_company_source") {
+    return Boolean(hasCompanySignal && (hasRoleSignal || hasInterviewProcessSignal || hasValuesSignal));
+  }
   const isDirectionalCommunity =
     sourceType === "directional_glassdoor" ||
     sourceType === "directional_reddit" ||
