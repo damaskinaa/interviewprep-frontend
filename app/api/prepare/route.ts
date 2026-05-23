@@ -260,6 +260,20 @@ export async function POST(request: Request) {
 
     const body = await request.json();
 
+    const answerBank = String(body.answer_bank || "").trim();
+    const companyDescription = String(body.company_description || "").trim();
+    const extraInstructions = String(body.extra || "").trim();
+
+    const userContextBlocks = [
+      extraInstructions,
+      answerBank
+        ? `[CANDIDATE_ANSWER_BANK]\nCandidate's own prepared answers and stories:\n${answerBank}\n[/CANDIDATE_ANSWER_BANK]`
+        : "",
+      companyDescription
+        ? `[ADDITIONAL_COMPANY_CONTEXT]\nAdditional company context from the user:\n${companyDescription}\n[/ADDITIONAL_COMPANY_CONTEXT]`
+        : "",
+    ].filter(Boolean);
+
     const externalResearch = await buildExternalResearch(
       body.company_name || "",
       body.role_name || ""
@@ -268,8 +282,8 @@ export async function POST(request: Request) {
     const enrichedBody = {
       ...body,
       extra: externalResearch
-        ? `${body.extra || ""}\n\n${externalResearch}`
-        : body.extra || "",
+        ? `${userContextBlocks.join("\n\n")}\n\n${externalResearch}`.trim()
+        : userContextBlocks.join("\n\n"),
     };
 
     const { previewUrl, previewToken } = await getDaytonaPreview();
@@ -313,11 +327,13 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json(JSON.parse(text));
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+
     return NextResponse.json(
       {
         error: "Frontend API route crashed",
-        message: err?.message || "Unknown error",
+        message,
       },
       { status: 500 }
     );

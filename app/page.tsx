@@ -6,7 +6,7 @@ type Result = {
   status?: string;
   output_file?: string;
   markdown?: string;
-  product_json?: any;
+  product_json?: unknown;
   error?: string;
   detail?: string;
 };
@@ -219,11 +219,14 @@ export default function Home() {
   const [roleName, setRoleName] = useState("Program Manager");
   const [jobDescription, setJobDescription] = useState("");
   const [cv, setCv] = useState("");
+  const [answerBank, setAnswerBank] = useState("");
+  const [companyDescription, setCompanyDescription] = useState("");
   const [extra, setExtra] = useState(
-    "Create a detailed interview prep pack and Lua mock interview brief. Use exact evidence from the CV, job description, and answer bank. Avoid generic advice."
+    "Create a detailed interview prep pack and Lua mock interview brief. Build top 1 percent CV-plausible answers later: realistic for the candidate's background, with believable metrics and a clear winning process."
   );
   const [jobUpload, setJobUpload] = useState<UploadState | null>(null);
   const [cvUpload, setCvUpload] = useState<UploadState | null>(null);
+  const [answerUpload, setAnswerUpload] = useState<UploadState | null>(null);
   const [extraUpload, setExtraUpload] = useState<UploadState | null>(null);
   const [extracting, setExtracting] = useState("");
   const [loading, setLoading] = useState(false);
@@ -269,8 +272,8 @@ export default function Home() {
         characters: data.characters,
         warning: data.warning || "",
       });
-    } catch (err: any) {
-      setError(err.message || "Could not extract file.");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not extract file.");
     } finally {
       setExtracting("");
     }
@@ -293,6 +296,8 @@ export default function Home() {
           role_name: roleName,
           job_description: jobDescription,
           cv,
+          answer_bank: answerBank,
+          company_description: companyDescription,
           extra
         })
       });
@@ -309,8 +314,8 @@ export default function Home() {
       }
 
       setResult(data);
-    } catch (err: any) {
-      setError(err.message || "Something went wrong");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
       setLoading(false);
     }
@@ -327,44 +332,41 @@ export default function Home() {
   const canSubmit = companyName.trim() && roleName.trim() && jobDescription.trim() && cv.trim();
 
   return (
-    <main className="min-h-screen bg-[#050505] text-white">
-      <section className="relative overflow-hidden px-6 py-8">
-        <div className="absolute left-0 top-0 h-[480px] w-[480px] rounded-full bg-[#c9a96a]/10 blur-[140px]" />
-        <div className="absolute right-0 top-20 h-[520px] w-[520px] rounded-full bg-white/8 blur-[150px]" />
-
-        <div className="relative mx-auto max-w-[1500px]">
-          <nav className="flex items-center justify-between border-b border-white/10 pb-6">
+    <main className="min-h-screen bg-[#0a0a0a] text-[#f5f0e8]">
+      <section className="px-6 py-8">
+        <div className="mx-auto max-w-[1500px]">
+          <nav className="flex items-center justify-between border-b border-[#2a2a2a] pb-6">
             <div>
               <img
                 src="/nailit-logo-final.png?v=2"
                 alt="Nailit"
                 className="h-10 w-auto object-contain"
               />
-              <p className="mt-2 text-sm text-white/40">
+              <p className="mt-2 text-sm text-[#f5f0e8]/45">
                 Interview strategy for people who want the offer.
               </p>
             </div>
 
-            <div className="hidden items-center gap-3 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-white/55 md:flex">
-              <span className="h-2 w-2 rounded-full bg-emerald-300" />
+            <div className="hidden items-center gap-3 rounded-full border border-[#2a2a2a] bg-[#141414] px-4 py-2 text-sm text-[#f5f0e8]/60 md:flex">
+              <span className="h-2 w-2 rounded-full bg-[#c9a96e]" />
               Secure prep workspace
             </div>
           </nav>
 
           <header className="grid gap-8 py-12 lg:grid-cols-[0.8fr_1.2fr] lg:items-end">
             <div>
-              <p className="text-sm uppercase tracking-[0.35em] text-[#c9a96a]">
+              <p className="text-sm uppercase tracking-[0.35em] text-[#c9a96e]">
                 Career prep, sharpened
               </p>
 
-              <h1 className="mt-5 max-w-3xl text-5xl font-semibold leading-[0.98] tracking-[-0.06em] text-white md:text-7xl">
+              <h1 className="mt-5 max-w-3xl text-5xl font-semibold leading-[0.98] tracking-[-0.06em] text-[#f5f0e8] md:text-7xl">
                 Walk into the interview with a plan.
               </h1>
             </div>
 
             <div className="max-w-2xl lg:ml-auto">
-              <p className="text-lg leading-8 text-white/55">
-                Upload or paste the role, your CV, and your answer bank. Nailit extracts the text first so you can review it before generating.
+              <p className="text-lg leading-8 text-[#f5f0e8]/62">
+                Upload the role, CV, prepared stories, and company context. Nailit turns the material into a private interview strategy pack.
               </p>
 
               <div className="mt-6 grid gap-3 sm:grid-cols-3">
@@ -375,14 +377,14 @@ export default function Home() {
             </div>
           </header>
 
-          <section className="rounded-[2rem] border border-white/10 bg-white/[0.035] p-4 shadow-2xl shadow-black/60 backdrop-blur-xl">
-            <div className="rounded-[1.5rem] border border-white/10 bg-[#0b0b0b] p-5 md:p-8">
-              <div className="flex flex-col justify-between gap-5 border-b border-white/10 pb-6 md:flex-row md:items-start">
+          <section className="rounded-[2rem] border border-[#2a2a2a] bg-[#141414] p-4 shadow-2xl shadow-black/60">
+            <div className="rounded-[1.5rem] border border-[#2a2a2a] bg-[#141414] p-5 md:p-8">
+              <div className="flex flex-col justify-between gap-5 border-b border-[#2a2a2a] pb-6 md:flex-row md:items-start">
                 <div>
                   <h2 className="text-3xl font-semibold tracking-[-0.04em]">
                     Build your prep pack
                   </h2>
-                  <p className="mt-2 max-w-3xl text-sm leading-6 text-white/45">
+                  <p className="mt-2 max-w-3xl text-sm leading-6 text-[#f5f0e8]/48">
                     Upload files or paste text manually. Extracted text is placed into the text boxes so you can verify the content before Nailit uses it.
                   </p>
                 </div>
@@ -390,7 +392,7 @@ export default function Home() {
                 <button
                   onClick={handleSubmit}
                   disabled={loading || extracting !== "" || !canSubmit}
-                  className="rounded-2xl bg-[#f5f0e6] px-8 py-4 text-base font-semibold text-black transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
+                  className="rounded-2xl bg-[#c9a96e] px-8 py-4 text-base font-semibold text-[#0a0a0a] transition hover:bg-[#f5f0e8] disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {loading ? "Building..." : extracting ? "Reading file..." : "Create prep pack"}
                 </button>
@@ -429,7 +431,7 @@ export default function Home() {
                       <button
                         type="button"
                         onClick={() => setJobDescription(cleanPastedText(jobDescription))}
-                        className="rounded-xl border border-white/10 px-3 py-2 text-xs text-white/55 hover:text-white"
+                        className="rounded-xl border border-[#2a2a2a] px-3 py-2 text-xs text-[#f5f0e8]/58 hover:text-[#f5f0e8]"
                       >
                         Clean text
                       </button>
@@ -457,7 +459,7 @@ export default function Home() {
                       <button
                         type="button"
                         onClick={() => setCv(cleanPastedText(cv))}
-                        className="rounded-xl border border-white/10 px-3 py-2 text-xs text-white/55 hover:text-white"
+                        className="rounded-xl border border-[#2a2a2a] px-3 py-2 text-xs text-[#f5f0e8]/58 hover:text-[#f5f0e8]"
                       >
                         Clean text
                       </button>
@@ -470,9 +472,44 @@ export default function Home() {
                     />
                   </Field>
 
-                  <Field label="Answer bank or extra context">
+                  <Field label="Your prepared answers and stories (optional)">
                     <FileUpload
-                      label="Upload answer bank"
+                      label="Upload prepared answers"
+                      upload={answerUpload}
+                      busy={extracting === "answer_bank"}
+                      onFile={(file) =>
+                        extractIntoTextarea(file, answerBank, setAnswerBank, setAnswerUpload, "answer_bank")
+                      }
+                    />
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setAnswerBank(cleanPastedText(answerBank))}
+                        className="rounded-xl border border-[#2a2a2a] px-3 py-2 text-xs text-[#f5f0e8]/58 hover:text-[#f5f0e8]"
+                      >
+                        Clean text
+                      </button>
+                    </div>
+                    <textarea
+                      className="textarea min-h-[300px]"
+                      value={answerBank}
+                      onChange={(e) => setAnswerBank(e.target.value)}
+                      placeholder="Paste prepared answers, interview stories, achievements, project notes, or examples you want Nailit to use"
+                    />
+                  </Field>
+
+                  <Field label="Additional company context (optional)">
+                    <textarea
+                      className="textarea min-h-[180px]"
+                      value={companyDescription}
+                      onChange={(e) => setCompanyDescription(e.target.value)}
+                      placeholder="Paste extra company notes, team details, recruiter context, interview hints, or anything you already know"
+                    />
+                  </Field>
+
+                  <Field label="Extra instructions">
+                    <FileUpload
+                      label="Upload extra notes"
                       upload={extraUpload}
                       busy={extracting === "extra"}
                       onFile={(file) =>
@@ -483,7 +520,7 @@ export default function Home() {
                       <button
                         type="button"
                         onClick={() => setExtra(cleanPastedText(extra))}
-                        className="rounded-xl border border-white/10 px-3 py-2 text-xs text-white/55 hover:text-white"
+                        className="rounded-xl border border-[#2a2a2a] px-3 py-2 text-xs text-[#f5f0e8]/58 hover:text-[#f5f0e8]"
                       >
                         Clean text
                       </button>
@@ -492,7 +529,7 @@ export default function Home() {
                       className="textarea min-h-[260px]"
                       value={extra}
                       onChange={(e) => setExtra(e.target.value)}
-                      placeholder="Paste prepared answers, interview stories, notes, concerns, or company context"
+                      placeholder="Add any specific instruction, concern, or preference for this prep pack"
                     />
                   </Field>
                 </div>
@@ -508,10 +545,10 @@ export default function Home() {
 
           {result && (
             <section className="py-10">
-              <div className="rounded-[2rem] border border-[#c9a96a]/20 bg-[#0b0905] p-5 md:p-8">
+              <div className="rounded-[2rem] border border-[#2a2a2a] bg-[#141414] p-5 md:p-8">
                 <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
                   <div>
-                    <p className="text-sm uppercase tracking-[0.3em] text-[#c9a96a]">
+                    <p className="text-sm uppercase tracking-[0.3em] text-[#c9a96e]">
                       Ready
                     </p>
                     <h2 className="mt-3 text-4xl font-semibold tracking-[-0.05em]">
@@ -527,7 +564,7 @@ export default function Home() {
                   {result.markdown && (
                     <button
                       onClick={() => navigator.clipboard.writeText(result.markdown || "")}
-                      className="rounded-2xl bg-[#f5f0e6] px-5 py-3 text-sm font-semibold text-black transition hover:bg-white"
+                      className="rounded-2xl bg-[#c9a96e] px-5 py-3 text-sm font-semibold text-[#0a0a0a] transition hover:bg-[#f5f0e8]"
                     >
                       Copy full pack
                     </button>
@@ -536,12 +573,12 @@ export default function Home() {
 
                 {sections.length > 0 && currentSection && (
                   <div className="mt-8 grid gap-5 xl:grid-cols-[340px_1fr]">
-                    <aside className="rounded-3xl border border-white/10 bg-black/30 p-4">
-                      <p className="px-3 pb-3 text-sm font-semibold text-white">
+                    <aside className="rounded-3xl border border-[#2a2a2a] bg-[#0a0a0a] p-4">
+                      <p className="px-3 pb-3 text-sm font-semibold text-[#f5f0e8]">
                         Inside this pack
                       </p>
 
-                      <div className="space-y-2">
+                      <div className="flex gap-2 overflow-x-auto pb-2 xl:block xl:space-y-2 xl:overflow-visible xl:pb-0">
                         {sections.map((section) => {
                           const selected = section.title === currentSection.title;
 
@@ -549,10 +586,10 @@ export default function Home() {
                             <button
                               key={section.title}
                               onClick={() => setActiveSection(section.title)}
-                              className={`w-full rounded-2xl px-4 py-3 text-left text-sm transition ${
+                              className={`shrink-0 rounded-full px-4 py-3 text-left text-sm transition xl:w-full xl:rounded-2xl ${
                                 selected
-                                  ? "bg-[#c9a96a]/15 text-[#f5e6c8]"
-                                  : "text-white/45 hover:bg-white/[0.04] hover:text-white"
+                                  ? "bg-[#c9a96e] text-[#0a0a0a]"
+                                  : "border border-[#2a2a2a] text-[#f5f0e8]/50 hover:border-[#c9a96e]/45 hover:text-[#f5f0e8]"
                               }`}
                             >
                               {prettyTitle(section.title)}
@@ -562,8 +599,8 @@ export default function Home() {
                       </div>
                     </aside>
 
-                    <article className="rounded-3xl border border-white/10 bg-[#080808] p-6 md:p-9">
-                      <p className="text-sm uppercase tracking-[0.28em] text-[#c9a96a]">
+                    <article className="rounded-3xl border border-[#2a2a2a] bg-[#0a0a0a] p-6 md:p-9">
+                      <p className="text-sm uppercase tracking-[0.28em] text-[#c9a96e]">
                         Section
                       </p>
                       <h3 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-white">
@@ -585,10 +622,10 @@ export default function Home() {
         .input {
           width: 100%;
           border-radius: 1rem;
-          border: 1px solid rgba(255, 255, 255, 0.11);
-          background: rgba(0, 0, 0, 0.48);
+          border: 1px solid #2a2a2a;
+          background: #1e1e1e;
           padding: 1rem;
-          color: white;
+          color: #f5f0e8;
           outline: none;
           font-size: 1rem;
         }
@@ -597,10 +634,10 @@ export default function Home() {
           width: 100%;
           resize: vertical;
           border-radius: 1rem;
-          border: 1px solid rgba(255, 255, 255, 0.11);
-          background: rgba(0, 0, 0, 0.48);
+          border: 1px solid #2a2a2a;
+          background: #1e1e1e;
           padding: 1rem;
-          color: white;
+          color: #f5f0e8;
           outline: none;
           font-size: 1rem;
           line-height: 1.65;
@@ -608,13 +645,13 @@ export default function Home() {
 
         .input:focus,
         .textarea:focus {
-          border-color: rgba(201, 169, 106, 0.75);
-          box-shadow: 0 0 0 4px rgba(201, 169, 106, 0.10);
+          border-color: #c9a96e;
+          box-shadow: 0 0 0 4px rgba(201, 169, 110, 0.16);
         }
 
         .input::placeholder,
         .textarea::placeholder {
-          color: rgba(255, 255, 255, 0.28);
+          color: rgba(245, 240, 232, 0.32);
         }
       `}</style>
     </main>
