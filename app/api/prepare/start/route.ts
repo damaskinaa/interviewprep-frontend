@@ -456,6 +456,12 @@ async function buildExternalResearchWithFallback(company: string, role: string) 
 }
 
 function shouldForceTavilyTimeout(body: Record<string, unknown>) {
+  const allowOverride = process.env.ALLOW_RESEARCH_TEST_OVERRIDE === "true";
+
+  if (!allowOverride) {
+    return false;
+  }
+
   return body.research_lab_force_tavily_timeout === true;
 }
 
