@@ -235,6 +235,7 @@ export default function Home() {
   const [jobDescription, setJobDescription] = useState("");
   const [cv, setCv] = useState("");
   const [answerBank, setAnswerBank] = useState("");
+  const [youtubeTranscripts, setYoutubeTranscripts] = useState("");
   const [companyDescription, setCompanyDescription] = useState("");
   const [extra, setExtra] = useState(
     "Create a detailed interview prep pack and Lua mock interview brief. Build top 1 percent CV-plausible answers later: realistic for the candidate's background, with believable metrics and a clear winning process."
@@ -242,6 +243,7 @@ export default function Home() {
   const [jobUpload, setJobUpload] = useState<UploadState | null>(null);
   const [cvUpload, setCvUpload] = useState<UploadState | null>(null);
   const [answerUpload, setAnswerUpload] = useState<UploadState | null>(null);
+  const [youtubeUpload, setYoutubeUpload] = useState<UploadState | null>(null);
   const [extraUpload, setExtraUpload] = useState<UploadState | null>(null);
   const [extracting, setExtracting] = useState("");
   const [loading, setLoading] = useState(false);
@@ -320,6 +322,7 @@ export default function Home() {
           job_description: jobDescription,
           cv,
           answer_bank: answerBank,
+          youtube_transcripts: youtubeTranscripts,
           company_description: companyDescription,
           extra
         })
@@ -558,6 +561,38 @@ export default function Home() {
                     />
                   </Field>
 
+                  <Field
+                    label="YouTube Interview Transcripts (optional)"
+                    description="Paste transcripts from Google PM interview videos, candidate experiences, or any relevant YouTube content. The more the better."
+                  >
+                    <FileUpload
+                      label="Upload YouTube transcripts"
+                      upload={youtubeUpload}
+                      busy={extracting === "youtube_transcripts"}
+                      onFile={(file) =>
+                        extractIntoTextarea(file, youtubeTranscripts, setYoutubeTranscripts, setYoutubeUpload, "youtube_transcripts")
+                      }
+                    />
+                    <p className="rounded-xl border border-[#c9a96e]/20 bg-[#c9a96e]/10 px-3 py-2 text-xs leading-5 text-[#f2dfb8]/75">
+                      Tip: get transcripts free from any YouTube video by clicking the three dots under the video and selecting Open Transcript.
+                    </p>
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setYoutubeTranscripts(cleanPastedText(youtubeTranscripts))}
+                        className="rounded-xl border border-[#2a2a2a] px-3 py-2 text-xs text-[#f5f0e8]/58 hover:text-[#f5f0e8]"
+                      >
+                        Clean text
+                      </button>
+                    </div>
+                    <textarea
+                      className="textarea min-h-[320px]"
+                      value={youtubeTranscripts}
+                      onChange={(e) => setYoutubeTranscripts(e.target.value)}
+                      placeholder="Paste YouTube transcripts, candidate interview experiences, or video notes here"
+                    />
+                  </Field>
+
                   <Field label="Additional company context (optional)">
                     <textarea
                       className="textarea min-h-[180px]"
@@ -747,10 +782,25 @@ export default function Home() {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  description,
+  children,
+}: {
+  label: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
   return (
     <label className="grid gap-3">
-      <span className="text-sm text-white/60">{label}</span>
+      <span>
+        <span className="block text-sm text-white/60">{label}</span>
+        {description && (
+          <span className="mt-1 block text-xs leading-5 text-white/38">
+            {description}
+          </span>
+        )}
+      </span>
       {children}
     </label>
   );

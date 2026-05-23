@@ -466,6 +466,7 @@ export async function POST(request: Request) {
     const body = await request.json();
     const answerBank = String(body.answer_bank || "").trim();
     const companyDescription = String(body.company_description || "").trim();
+    const youtubeTranscripts = String(body.youtube_transcripts || "").trim();
     const extraInstructions = String(body.extra || "").trim();
 
     const userContextBlocks = [
@@ -475,6 +476,9 @@ export async function POST(request: Request) {
         : "",
       companyDescription
         ? `[ADDITIONAL_COMPANY_CONTEXT]\nAdditional company context from the user:\n${companyDescription}\n[/ADDITIONAL_COMPANY_CONTEXT]`
+        : "",
+      youtubeTranscripts
+        ? `[YOUTUBE_TRANSCRIPTS]\n${youtubeTranscripts}\n[/YOUTUBE_TRANSCRIPTS]`
         : "",
     ].filter(Boolean);
 
