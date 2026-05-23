@@ -69,6 +69,11 @@ type ResearchRow = {
   confidence: number;
 };
 
+const TAVILY_TIMEOUT_MS = 8000;
+const TAVILY_FALLBACK_RESEARCH = `[NAILIT_EXTERNAL_RESEARCH]
+Research skipped: timeout
+[/NAILIT_EXTERNAL_RESEARCH]`;
+
 function sourceTypeForUrl(url: string) {
   const host = safeHost(url);
 
@@ -243,6 +248,30 @@ ${chunks.join("\n\n---\n\n").slice(0, 38000)}
 `.trim();
 }
 
+async function buildExternalResearchWithFallback(company: string, role: string) {
+  const started = Date.now();
+  let fallbackUsed = false;
+
+  try {
+    const research = await Promise.race([
+      buildExternalResearch(company, role),
+      new Promise<string>((_, reject) =>
+        setTimeout(() => reject(new Error("Tavily research timed out")), TAVILY_TIMEOUT_MS)
+      ),
+    ]);
+
+    const elapsed = Date.now() - started;
+    console.log(`[Nailit] Tavily elapsed=${elapsed}ms fallback_used=${fallbackUsed}`);
+    return research || "";
+  } catch (err: unknown) {
+    fallbackUsed = true;
+    const elapsed = Date.now() - started;
+    const message = err instanceof Error ? err.message : "Unknown Tavily error";
+    console.log(`[Nailit] Tavily elapsed=${elapsed}ms fallback_used=${fallbackUsed} reason=${message}`);
+    return TAVILY_FALLBACK_RESEARCH;
+  }
+}
+
 
 export async function POST(request: Request) {
   try {
@@ -274,7 +303,7 @@ export async function POST(request: Request) {
         : "",
     ].filter(Boolean);
 
-    const externalResearch = await buildExternalResearch(
+    const externalResearch = await buildExternalResearchWithFallback(
       body.company_name || "",
       body.role_name || ""
     );
