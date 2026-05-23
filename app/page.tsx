@@ -22,6 +22,17 @@ type PackSection = {
   content: string;
 };
 
+type JobStatus = {
+  job_id: string;
+  status: "queued" | "running" | "done" | "failed" | string;
+  stage: string;
+  progress: number;
+  markdown?: string;
+  product_json?: unknown;
+  output_file?: string;
+  error?: string;
+};
+
 function splitPack(markdown: string): PackSection[] {
   const lines = markdown.split("\n");
   const sections: PackSection[] = [];
@@ -141,6 +152,10 @@ function parseSectionBlocks(content: string) {
   return blocks;
 }
 
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function RenderSection({ title, content }: { title: string; content: string }) {
   const blocks = parseSectionBlocks(content);
   const tone = sectionTone(title);
@@ -233,6 +248,10 @@ export default function Home() {
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState("");
   const [activeSection, setActiveSection] = useState("");
+  const [jobId, setJobId] = useState("");
+  const [jobStage, setJobStage] = useState("");
+  const [jobProgress, setJobProgress] = useState(0);
+  const [jobStatus, setJobStatus] = useState("");
 
   const sections = useMemo(() => splitPack(result?.markdown || ""), [result?.markdown]);
   const currentSection =
@@ -284,9 +303,13 @@ export default function Home() {
     setError("");
     setResult(null);
     setActiveSection("");
+    setJobId("");
+    setJobStage("Creating job");
+    setJobProgress(0);
+    setJobStatus("queued");
 
     try {
-      const res = await fetch("/api/prepare", {
+      const res = await fetch("/api/prepare/start", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -313,7 +336,44 @@ export default function Home() {
         throw new Error(`${data?.error || "Request failed"}: ${detail}`);
       }
 
-      setResult(data);
+      const startData = data as JobStatus;
+      setJobId(startData.job_id);
+      setJobStatus(startData.status || "queued");
+      setJobStage(startData.stage || "Job created");
+      setJobProgress(startData.progress || 0);
+
+      for (;;) {
+        await wait(3000);
+
+        const statusRes = await fetch(`/api/prepare/status?job_id=${encodeURIComponent(startData.job_id)}`, {
+          method: "GET",
+          cache: "no-store",
+        });
+        const statusData = (await statusRes.json()) as JobStatus;
+
+        if (!statusRes.ok) {
+          const detail = statusData?.error || JSON.stringify(statusData);
+          throw new Error(`Status request failed: ${detail}`);
+        }
+
+        setJobStatus(statusData.status || "running");
+        setJobStage(statusData.stage || "Working");
+        setJobProgress(Number(statusData.progress || 0));
+
+        if (statusData.status === "done") {
+          setResult({
+            status: "done",
+            output_file: statusData.output_file,
+            markdown: statusData.markdown || "",
+            product_json: statusData.product_json,
+          });
+          break;
+        }
+
+        if (statusData.status === "failed") {
+          throw new Error(statusData.error || "Prep job failed.");
+        }
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -538,6 +598,35 @@ export default function Home() {
               {error && (
                 <div className="mt-6 rounded-2xl border border-red-400/20 bg-red-500/10 p-4 text-red-100">
                   {error}
+                </div>
+              )}
+
+              {(loading || jobId) && !result && !error && (
+                <div className="mt-6 rounded-2xl border border-[#c9a96e]/30 bg-[#0a0a0a] p-5">
+                  <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.3em] text-[#c9a96e]">
+                        {jobStatus || "queued"}
+                      </p>
+                      <h3 className="mt-2 text-xl font-semibold text-[#f5f0e8]">
+                        {jobStage || "Creating job"}
+                      </h3>
+                      {jobId && (
+                        <p className="mt-1 text-xs text-[#f5f0e8]/42">
+                          Job ID: {jobId}
+                        </p>
+                      )}
+                    </div>
+                    <div className="text-2xl font-semibold text-[#c9a96e]">
+                      {Math.max(0, Math.min(100, Math.round(jobProgress)))}%
+                    </div>
+                  </div>
+                  <div className="mt-4 h-2 overflow-hidden rounded-full bg-[#1e1e1e]">
+                    <div
+                      className="h-full rounded-full bg-[#c9a96e] transition-all duration-500"
+                      style={{ width: `${Math.max(3, Math.min(100, jobProgress || 3))}%` }}
+                    />
+                  </div>
                 </div>
               )}
             </div>
