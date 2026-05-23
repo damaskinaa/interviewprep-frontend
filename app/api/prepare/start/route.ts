@@ -12,18 +12,53 @@ type DaytonaPreviewResponse = {
   };
 };
 
-type ResearchRow = {
+type SearchResult = {
   title: string;
   url: string;
-  content: string;
+  snippet: string;
   query: string;
-  sourceType: string;
-  confidence: number;
 };
 
-const TAVILY_TIMEOUT_MS = 8000;
+type SourceType =
+  | "official_company_source"
+  | "directional_glassdoor"
+  | "directional_reddit"
+  | "directional_blind"
+  | "directional_blog"
+  | "directional_prep"
+  | "youtube_source";
+
+type CandidateSource = SearchResult & {
+  sourceType: SourceType;
+  priority: number;
+  confidence: "high" | "medium" | "low";
+  host: string;
+};
+
+type ExtractedSource = CandidateSource & {
+  content: string;
+};
+
+const TAVILY_SEARCH_TIMEOUT_MS = 15000;
+const TAVILY_EXTRACT_TIMEOUT_MS = 15000;
 const TAVILY_FALLBACK_RESEARCH = `[NAILIT_EXTERNAL_RESEARCH]
 Research skipped: timeout
+
+[OFFICIAL_SOURCES]
+No official sources extracted. Use JD, CV, answer bank, and company context only.
+[/OFFICIAL_SOURCES]
+
+[DIRECTIONAL_SOURCES]
+No directional sources extracted. Do not infer public interview process claims.
+[/DIRECTIONAL_SOURCES]
+
+[YOUTUBE_SOURCES]
+No YouTube sources collected.
+[/YOUTUBE_SOURCES]
+
+[SOURCE_MANIFEST]
+Research skipped: timeout
+[/SOURCE_MANIFEST]
 [/NAILIT_EXTERNAL_RESEARCH]`;
 
 function getValue(response: DaytonaPreviewResponse, key: "url" | "token") {
@@ -82,39 +117,68 @@ function safeHost(url: string) {
   }
 }
 
-function sourceTypeForUrl(url: string) {
-  const host = safeHost(url);
-
-  if (!host) return "Weak or background source";
-  if (host.includes("google.com") || host.includes("abc.xyz")) return "Official company source";
-  if (host.includes("reddit.com")) return "Reddit directional theme";
-  if (host.includes("glassdoor.")) return "Glassdoor directional theme";
-  if (host.includes("youtube.com") || host.includes("youtu.be")) return "YouTube public theme";
-  if (host.includes("linkedin.com")) return "Public prep or candidate experience";
-  if (
-    host.includes("interviewing.io") ||
-    host.includes("levels.fyi") ||
-    host.includes("teamblind.com") ||
-    host.includes("igotanoffer.com") ||
-    host.includes("exponent.com")
-  ) return "Public prep or candidate experience";
-
-  return "High signal public source";
+function normalizeCompany(value: string) {
+  return (value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
-function sourceConfidence(type: string) {
-  if (type === "Official company source") return 5;
-  if (type === "High signal public source") return 4;
-  if (type.includes("directional") || type.includes("YouTube") || type.includes("candidate")) return 3;
-  return 2;
-}
-
-function cleanContent(value: string) {
+function cleanContent(value: string, maxLength = 4000) {
   return (value || "")
     .replace(/\s+/g, " ")
     .replace(/[\u0000-\u001F\u007F]/g, " ")
     .trim()
-    .slice(0, 1400);
+    .slice(0, maxLength);
+}
+
+function isLikelySeoSpam(url: string, title: string) {
+  const host = safeHost(url);
+  const text = `${host} ${title}`.toLowerCase();
+  const spamTerms = [
+    "coupon",
+    "promo",
+    "salary.com",
+    "ziprecruiter",
+    "jooble",
+    "jobrapido",
+    "simplyhired",
+    "template",
+    "resume example",
+    "cover letter",
+  ];
+  return spamTerms.some((term) => text.includes(term));
+}
+
+function sourceTypeForUrl(url: string, company: string): SourceType {
+  const host = safeHost(url);
+  const companySlug = normalizeCompany(company);
+  const hostSlug = normalizeCompany(host);
+
+  if (host.includes("youtube.com") || host.includes("youtu.be")) return "youtube_source";
+  if (host.includes("glassdoor.")) return "directional_glassdoor";
+  if (host.includes("reddit.com")) return "directional_reddit";
+  if (host.includes("blind.app") || host.includes("teamblind.com")) return "directional_blind";
+  if (host.includes("medium.com") || host.includes("substack.com") || host.includes("blog")) return "directional_blog";
+  if (companySlug && hostSlug.includes(companySlug)) return "official_company_source";
+  if (companySlug === "google" && (host.includes("google.com") || host.includes("abc.xyz"))) return "official_company_source";
+
+  return "directional_prep";
+}
+
+function sourcePriority(type: SourceType) {
+  switch (type) {
+    case "official_company_source": return 100;
+    case "directional_glassdoor": return 85;
+    case "directional_reddit": return 82;
+    case "directional_blind": return 80;
+    case "directional_blog": return 62;
+    case "youtube_source": return 55;
+    case "directional_prep": return 35;
+  }
+}
+
+function confidenceForType(type: SourceType): "high" | "medium" | "low" {
+  if (type === "official_company_source") return "high";
+  if (["directional_glassdoor", "directional_reddit", "directional_blind"].includes(type)) return "medium";
+  return "low";
 }
 
 function researchQueries(company: string, role: string) {
@@ -122,129 +186,257 @@ function researchQueries(company: string, role: string) {
   const r = role.trim();
 
   return [
-    `${c} official careers interview tips hiring process`,
-    `${c} official values culture leadership principles`,
-    `${c} careers ${r} responsibilities requirements`,
-    `${c} ${r} interview process questions experience`,
-    `site:glassdoor.com ${c} ${r} interview questions`,
-    `site:reddit.com ${c} ${r} interview experience`,
+    `${c} official interview process`,
+    `${c} ${r} interview questions site:glassdoor.com`,
+    `${c} interview experience site:reddit.com`,
+    `${c} values leadership principles`,
+    `${c} careers how we hire`,
+    `${r} ${c} interview rounds behavioral questions`,
+    `${c} interview site:blind.app`,
+    `${c} ${r} interview tips site:medium.com`,
+    `${c} ${r} interview questions preparation 2024 2025`,
+    `${c} ${r} offer process timeline`,
+    `${c} engineering blog culture values`,
+    `${c} ${r} interview experience candidate`,
   ];
 }
 
-async function tavilySearch(query: string): Promise<ResearchRow[]> {
+async function tavilySearch(query: string, company: string): Promise<SearchResult[]> {
   const key = process.env.TAVILY_API_KEY;
-
   if (!key) return [];
 
-  const response = await fetch("https://api.tavily.com/search", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      query,
-      max_results: 3,
-      search_depth: "basic",
-      include_answer: false,
-      include_raw_content: false,
-    }),
-    cache: "no-store",
-  });
-
-  if (!response.ok) return [];
-
-  const data = await response.json();
-  const rows: ResearchRow[] = [];
-
-  for (const item of data.results || []) {
-    const url = item.url || "";
-    const title = item.title || "";
-    const content = cleanContent(item.content || "");
-
-    if (!url || url === "tavily_answer" || url === "tavily_error") continue;
-    if (!content || content.length < 120) continue;
-
-    const sourceType = sourceTypeForUrl(url);
-
-    rows.push({
-      title,
-      url,
-      content,
-      query,
-      sourceType,
-      confidence: sourceConfidence(sourceType),
+  try {
+    const response = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        query,
+        max_results: 8,
+        search_depth: "basic",
+        include_answer: false,
+        include_raw_content: false,
+      }),
+      cache: "no-store",
     });
+
+    if (!response.ok) return [];
+
+    const data = await response.json();
+    const rows: SearchResult[] = [];
+
+    for (const item of data.results || []) {
+      const url = String(item.url || "").trim();
+      const title = cleanContent(String(item.title || ""), 240);
+      const snippet = cleanContent(String(item.content || ""), 900);
+
+      if (!url || url === "tavily_answer" || url === "tavily_error") continue;
+      if (isLikelySeoSpam(url, title)) continue;
+      if (!safeHost(url)) continue;
+
+      rows.push({ title, url, snippet, query });
+    }
+
+    return rows;
+  } catch (err) {
+    console.log(`[Nailit research] search skipped query="${query}" reason=${err instanceof Error ? err.message : "unknown"}`);
+    return [];
+  }
+}
+
+function canonicalUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    parsed.hash = "";
+    parsed.search = "";
+    return parsed.toString().replace(/\/$/, "").toLowerCase();
+  } catch {
+    return url.split("?")[0].replace(/\/$/, "").toLowerCase();
+  }
+}
+
+function dedupeAndPrioritize(rows: SearchResult[], company: string) {
+  const byUrl = new Map<string, CandidateSource>();
+
+  for (const row of rows) {
+    const key = canonicalUrl(row.url);
+    if (!key || isLikelySeoSpam(row.url, row.title)) continue;
+
+    const sourceType = sourceTypeForUrl(row.url, company);
+    const host = safeHost(row.url);
+    const candidate: CandidateSource = {
+      ...row,
+      url: row.url,
+      sourceType,
+      priority: sourcePriority(sourceType) + Math.min(row.snippet.length / 300, 6),
+      confidence: confidenceForType(sourceType),
+      host,
+    };
+
+    const existing = byUrl.get(key);
+    if (!existing || candidate.priority > existing.priority) {
+      byUrl.set(key, candidate);
+    }
   }
 
-  return rows;
+  return Array.from(byUrl.values())
+    .sort((a, b) => b.priority - a.priority || b.snippet.length - a.snippet.length)
+    .slice(0, 30);
+}
+
+async function tavilyExtract(urls: string[]) {
+  const key = process.env.TAVILY_API_KEY;
+  if (!key || !urls.length) return new Map<string, string>();
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TAVILY_EXTRACT_TIMEOUT_MS);
+
+  try {
+    const response = await fetch("https://api.tavily.com/extract", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        urls,
+        extract_depth: "basic",
+        format: "text",
+      }),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    if (!response.ok) return new Map();
+
+    const data = await response.json();
+    const results = Array.isArray(data.results) ? data.results : [];
+    const extracted = new Map<string, string>();
+
+    for (const item of results) {
+      const url = String(item.url || "").trim();
+      const content = cleanContent(String(item.raw_content || item.content || item.markdown || ""), 5000);
+      if (url && content.length >= 120) {
+        extracted.set(canonicalUrl(url), content);
+      }
+    }
+
+    return extracted;
+  } catch (err) {
+    console.log(`[Nailit research] extract skipped reason=${err instanceof Error ? err.message : "unknown"}`);
+    return new Map<string, string>();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function sourceBlock(source: ExtractedSource, index: number) {
+  return [
+    `SOURCE_INDEX: ${index}`,
+    `SOURCE_TYPE: ${source.sourceType}`,
+    `SOURCE_CONFIDENCE: ${source.confidence}`,
+    `QUERY: ${source.query}`,
+    `TITLE: ${source.title}`,
+    `URL: ${source.url}`,
+    `CONTENT: ${source.content}`,
+  ].join("\n");
 }
 
 async function buildExternalResearch(company: string, role: string) {
   const started = Date.now();
-  const queries = researchQueries(company, role).slice(0, 6);
-  const seen = new Set<string>();
-  const rows: ResearchRow[] = [];
-
-  const research = Promise.allSettled(queries.map((query) => tavilySearch(query)));
-  const results = await Promise.race([
-    research,
-    new Promise<PromiseSettledResult<ResearchRow[]>[]>((_, reject) =>
-      setTimeout(() => reject(new Error("Tavily research timed out")), TAVILY_TIMEOUT_MS)
-    ),
+  const queries = researchQueries(company, role);
+  const searchBatch = Promise.all(queries.map((query) => tavilySearch(query, company)));
+  const settled = await Promise.race([
+    searchBatch,
+    new Promise<SearchResult[][]>((resolve) => setTimeout(() => resolve([]), TAVILY_SEARCH_TIMEOUT_MS)),
   ]);
 
-  for (const result of results) {
-    if (result.status !== "fulfilled") continue;
+  const discovered = settled.flat();
+  const candidates = dedupeAndPrioritize(discovered, company);
+  const youtubeSources = candidates.filter((source) => source.sourceType === "youtube_source");
+  const extractCandidates = candidates
+    .filter((source) => source.sourceType !== "youtube_source")
+    .slice(0, 25);
+  const extractedMap = await tavilyExtract(extractCandidates.map((source) => source.url));
 
-    for (const item of result.value) {
-      const key = item.url.split("?")[0].replace(/\/$/, "").toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      rows.push(item);
-    }
-  }
+  const extractedSources: ExtractedSource[] = extractCandidates
+    .map((source) => ({
+      ...source,
+      content: extractedMap.get(canonicalUrl(source.url)) || source.snippet,
+    }))
+    .filter((source) => source.content && source.content.length >= 120);
 
-  const sorted = rows
-    .sort((a, b) => b.confidence - a.confidence || b.content.length - a.content.length)
-    .slice(0, 18);
-
+  const officialSources = extractedSources.filter((source) => source.sourceType === "official_company_source");
+  const directionalSources = extractedSources.filter((source) => source.sourceType !== "official_company_source");
+  const manifestSources = [...candidates];
   const elapsed = Date.now() - started;
-  console.log(`[Nailit async] Tavily searches=${queries.length} elapsed=${elapsed}ms fallback_used=false results=${sorted.length}`);
 
-  if (!sorted.length) return "";
-
-  const officialCount = sorted.filter((x) => x.sourceType === "Official company source").length;
-  const directionalCount = sorted.filter((x) => x.sourceType.includes("directional") || x.sourceType.includes("YouTube")).length;
-
-  const chunks = sorted.map((item, index) =>
-    [
-      `SOURCE_INDEX: ${index + 1}`,
-      `SOURCE_TYPE: ${item.sourceType}`,
-      `SOURCE_CONFIDENCE: ${item.confidence}`,
-      `QUERY: ${item.query}`,
-      `TITLE: ${item.title}`,
-      `URL: ${item.url}`,
-      `CONTENT: ${item.content}`,
-    ].join("\n")
+  console.log(
+    `[Nailit research] searches=${queries.length} discovered=${discovered.length} candidates=${candidates.length} extracted=${extractedSources.length} youtube=${youtubeSources.length} elapsed=${elapsed}ms`
   );
+
+  if (!extractedSources.length && !youtubeSources.length) return "";
+
+  const officialBlock = officialSources.length
+    ? officialSources.map((source, index) => sourceBlock(source, index + 1)).join("\n\n---\n\n")
+    : "No official sources extracted. Use JD, CV, answer bank, and company context only for factual claims.";
+
+  const directionalBlock = directionalSources.length
+    ? directionalSources.map((source, index) => sourceBlock(source, index + 1)).join("\n\n---\n\n")
+    : "No directional sources extracted. Do not infer public interview process claims.";
+
+  const youtubeBlock = youtubeSources.length
+    ? youtubeSources.map((source, index) => [
+        `YOUTUBE_INDEX: ${index + 1}`,
+        `TITLE: ${source.title}`,
+        `URL: ${source.url}`,
+        `QUERY: ${source.query}`,
+        `CONFIDENCE: low`,
+      ].join("\n")).join("\n\n---\n\n")
+    : "No YouTube sources collected.";
+
+  const manifestBlock = manifestSources.map((source, index) => [
+    `${index + 1}. ${source.title}`,
+    `URL: ${source.url}`,
+    `TYPE: ${source.sourceType}`,
+    `CONFIDENCE: ${source.confidence}`,
+    `QUERY: ${source.query}`,
+  ].join("\n")).join("\n\n");
 
   return `
 [NAILIT_EXTERNAL_RESEARCH]
-Bounded research collected by the Vercel async start route before calling Daytona.
+Research Lab 50 percent capacity payload collected by Vercel before Daytona synthesis.
+Searches requested: ${queries.length}
+Candidate URLs discovered before dedupe: ${discovered.length}
+Candidate URLs after dedupe/prioritization: ${candidates.length}
+Extracted non-YouTube sources: ${extractedSources.length}
+YouTube URLs collected for transcript workflow: ${youtubeSources.length}
+Elapsed ms: ${elapsed}
 
-Research quality notes:
-Tavily searches used: ${queries.length}
-Tavily elapsed ms: ${elapsed}
-Official source count: ${officialCount}
-Directional public theme count: ${directionalCount}
-Use official company sources as highest confidence.
-Use Reddit, Glassdoor, YouTube, LinkedIn, forums, blogs, and prep sites only as directional public themes.
-Do not describe directional public themes as official facts.
-Do not invent exact interview rounds unless supported by official or repeated public evidence.
-Prefer JD, CV, answer bank, and company context as the targeting core. Research enhances them; it does not replace them.
+Rules for Daytona synthesis:
+Use official_company_source as high confidence factual evidence.
+Use directional_glassdoor, directional_reddit, directional_blind, directional_blog, and directional_prep only as directional public themes.
+Use youtube_source URLs only as leads unless the user supplied transcript text.
+Never call directional sources official.
+Never state exact interview rounds as fact unless official sources confirm them.
 
-${chunks.join("\n\n---\n\n").slice(0, 24000)}
+[OFFICIAL_SOURCES]
+${officialBlock}
+[/OFFICIAL_SOURCES]
+
+[DIRECTIONAL_SOURCES]
+${directionalBlock}
+[/DIRECTIONAL_SOURCES]
+
+[YOUTUBE_SOURCES]
+${youtubeBlock}
+[/YOUTUBE_SOURCES]
+
+[SOURCE_MANIFEST]
+${manifestBlock || "No sources collected."}
+[/SOURCE_MANIFEST]
 [/NAILIT_EXTERNAL_RESEARCH]
 `.trim();
 }
@@ -258,7 +450,7 @@ async function buildExternalResearchWithFallback(company: string, role: string) 
   } catch (err: unknown) {
     const elapsed = Date.now() - started;
     const message = err instanceof Error ? err.message : "Unknown Tavily error";
-    console.log(`[Nailit async] Tavily searches=6 elapsed=${elapsed}ms fallback_used=true reason=${message}`);
+    console.log(`[Nailit async] Tavily searches=12 elapsed=${elapsed}ms fallback_used=true reason=${message}`);
     return TAVILY_FALLBACK_RESEARCH;
   }
 }
