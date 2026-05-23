@@ -181,6 +181,49 @@ function confidenceForType(type: SourceType): "high" | "medium" | "low" {
   return "low";
 }
 
+function importantRoleTokens(role: string) {
+  return role
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length >= 4 && !["manager", "program", "product", "role"].includes(token));
+}
+
+function isRelevantSource(row: SearchResult, company: string, role: string, sourceType: SourceType) {
+  if (sourceType === "official_company_source") return true;
+
+  const companySlug = normalizeCompany(company);
+  const host = safeHost(row.url);
+  const sourceText = `${row.title} ${row.snippet} ${row.url}`.toLowerCase();
+  const sourceSlug = normalizeCompany(sourceText);
+  const roleTokens = importantRoleTokens(role);
+  const hasCompanySignal = companySlug && sourceSlug.includes(companySlug);
+  const hasRoleSignal = roleTokens.length === 0 || roleTokens.some((token) => sourceText.includes(token));
+  const hasInterviewProcessSignal =
+    sourceText.includes("interview") ||
+    sourceText.includes("hiring") ||
+    sourceText.includes("how we hire") ||
+    sourceText.includes("recruit");
+  const isDirectionalCommunity =
+    sourceType === "directional_glassdoor" ||
+    sourceType === "directional_reddit" ||
+    sourceType === "directional_blind";
+
+  if (isDirectionalCommunity) return Boolean(hasCompanySignal && (hasRoleSignal || hasInterviewProcessSignal));
+  if (sourceType === "youtube_source") return Boolean(hasCompanySignal && (hasRoleSignal || hasInterviewProcessSignal));
+
+  const genericPrepHost =
+    host.includes("igotanoffer") ||
+    host.includes("exponent") ||
+    host.includes("prep") ||
+    host.includes("interview") ||
+    host.includes("medium.com") ||
+    host.includes("substack.com");
+
+  if (genericPrepHost) return Boolean(hasCompanySignal && (hasRoleSignal || hasInterviewProcessSignal));
+
+  return Boolean(hasCompanySignal && (hasRoleSignal || hasInterviewProcessSignal));
+}
+
 function researchQueries(company: string, role: string) {
   const c = company.trim();
   const r = role.trim();
@@ -257,7 +300,7 @@ function canonicalUrl(url: string) {
   }
 }
 
-function dedupeAndPrioritize(rows: SearchResult[], company: string) {
+function dedupeAndPrioritize(rows: SearchResult[], company: string, role: string) {
   const byUrl = new Map<string, CandidateSource>();
 
   for (const row of rows) {
@@ -265,6 +308,7 @@ function dedupeAndPrioritize(rows: SearchResult[], company: string) {
     if (!key || isLikelySeoSpam(row.url, row.title)) continue;
 
     const sourceType = sourceTypeForUrl(row.url, company);
+    if (!isRelevantSource(row, company, role, sourceType)) continue;
     const host = safeHost(row.url);
     const candidate: CandidateSource = {
       ...row,
@@ -354,7 +398,7 @@ async function buildExternalResearch(company: string, role: string) {
   ]);
 
   const discovered = settled.flat();
-  const candidates = dedupeAndPrioritize(discovered, company);
+  const candidates = dedupeAndPrioritize(discovered, company, role);
   const youtubeSources = candidates.filter((source) => source.sourceType === "youtube_source");
   const extractCandidates = candidates
     .filter((source) => source.sourceType !== "youtube_source")
