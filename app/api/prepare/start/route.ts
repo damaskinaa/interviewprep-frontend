@@ -455,6 +455,15 @@ async function buildExternalResearchWithFallback(company: string, role: string) 
   }
 }
 
+function shouldForceTavilyTimeout(body: Record<string, unknown>) {
+  return body.research_lab_force_tavily_timeout === true;
+}
+
+function forcedTavilyTimeoutFallback() {
+  console.log("[Nailit async] Tavily searches=12 elapsed=0ms fallback_used=true reason=forced_research_lab_timeout_test");
+  return TAVILY_FALLBACK_RESEARCH;
+}
+
 export async function POST(request: Request) {
   try {
     const appApiKey = process.env.APP_API_KEY;
@@ -482,10 +491,12 @@ export async function POST(request: Request) {
         : "",
     ].filter(Boolean);
 
-    const externalResearch = await buildExternalResearchWithFallback(
-      body.company_name || "",
-      body.role_name || ""
-    );
+    const externalResearch = shouldForceTavilyTimeout(body)
+      ? forcedTavilyTimeoutFallback()
+      : await buildExternalResearchWithFallback(
+          body.company_name || "",
+          body.role_name || ""
+        );
 
     const enrichedBody = {
       ...body,
