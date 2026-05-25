@@ -11,7 +11,9 @@ function getValue(response: DaytonaPreviewResponse, key: "url" | "token") {
 
 function buildDaytonaUrl(previewUrl: string, endpoint: string) {
   const url = new URL(previewUrl.trim());
-  url.pathname = `${url.pathname.replace(/\/+$/, "")}${endpoint}`;
+  const [path, query = ""] = endpoint.split("?");
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}${path}`;
+  url.search = query;
   return url.toString();
 }
 
