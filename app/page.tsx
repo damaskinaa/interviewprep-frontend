@@ -1,785 +1,110 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 
-type Result = {
-  status?: string;
-  output_file?: string;
+type SessionMeta = {
+  session_id: string;
+  company_name: string;
+  role_name: string;
+  created_at?: string;
+};
+
+type ModuleName =
+  | "company_intelligence"
+  | "role_intelligence"
+  | "candidate_profile"
+  | "gap_map"
+  | "interview_strategy"
+  | "prep_pack";
+
+type ModuleState = {
+  jobId: string;
+  status: string;
+  stage: string;
+  progress: number;
+  result?: unknown;
   markdown?: string;
-  product_json?: unknown;
   error?: string;
-  detail?: string;
 };
 
 type UploadState = {
   fileName: string;
   characters: number;
-  warning: string;
+  warning?: string;
 };
 
-type PackSection = {
+const MODULES: {
+  name: ModuleName;
   title: string;
-  content: string;
-};
+  description: string;
+  button: string;
+  dependsOn?: ModuleName[];
+}[] = [
+  {
+    name: "company_intelligence",
+    title: "Company Intelligence",
+    description: "Researches the company, interview process, role signals, and directional public themes.",
+    button: "Run Research",
+  },
+  {
+    name: "role_intelligence",
+    title: "Role Intelligence",
+    description: "Analyzes the JD to extract what you must prove, hidden expectations, danger zones, and question seeds.",
+    button: "Analyze JD",
+  },
+  {
+    name: "candidate_profile",
+    title: "Candidate Profile",
+    description: "Maps your CV and prepared stories to the role requirements using raw documents from the session.",
+    button: "Build Profile",
+    dependsOn: ["role_intelligence"],
+  },
+  {
+    name: "gap_map",
+    title: "Gap Map",
+    description: "Finds dangerous gaps and writes repair scripts you can actually say in the interview.",
+    button: "Map Gaps",
+    dependsOn: ["candidate_profile", "company_intelligence"],
+  },
+  {
+    name: "interview_strategy",
+    title: "Interview Strategy",
+    description: "Generates the executive win strategy, round plan, full answers, pressure scripts, and seven day plan.",
+    button: "Generate Strategy",
+    dependsOn: ["gap_map"],
+  },
+  {
+    name: "prep_pack",
+    title: "Prep Pack",
+    description: "Assembles every completed artifact into the final readable prep document. No new AI calls.",
+    button: "Generate Pack",
+    dependsOn: ["company_intelligence", "role_intelligence", "candidate_profile", "gap_map", "interview_strategy"],
+  },
+];
 
-type JobStatus = {
-  job_id: string;
-  status: "queued" | "running" | "done" | "failed" | string;
-  stage: string;
-  progress: number;
-  markdown?: string;
-  product_json?: unknown;
-  output_file?: string;
-  error?: string;
-};
-
-function splitPack(markdown: string): PackSection[] {
-  const lines = markdown.split("\n");
-  const sections: PackSection[] = [];
-  let currentTitle = "Executive summary";
-  let currentLines: string[] = [];
-
-  for (const line of lines) {
-    if (line.startsWith("## ")) {
-      if (currentLines.join("\n").trim()) {
-        sections.push({
-          title: currentTitle,
-          content: currentLines.join("\n").trim(),
-        });
-      }
-
-      currentTitle = line.replace(/^##\s+/, "").trim();
-      currentLines = [];
-      continue;
-    }
-
-    if (!line.startsWith("# Interview Prep Pack")) {
-      currentLines.push(line);
-    }
-  }
-
-  if (currentLines.join("\n").trim()) {
-    sections.push({
-      title: currentTitle,
-      content: currentLines.join("\n").trim(),
-    });
-  }
-
-  return sections.filter((section) => section.content.trim());
-}
-
-function prettyTitle(title: string) {
-  return title
-    .replace(/And/g, "and")
-    .replace(/Json/g, "JSON")
-    .replace(/Cv/g, "CV")
-    .replace(/Lua/g, "Lua");
-}
-
-function sectionTone(title: string) {
-  const t = title.toLowerCase();
-
-  if (t.includes("risk") || t.includes("gap")) return "Risk";
-  if (t.includes("question") || t.includes("answer")) return "Practice";
-  if (t.includes("source") || t.includes("research")) return "Evidence";
-  if (t.includes("strategy") || t.includes("signal")) return "Strategy";
-  if (t.includes("story")) return "Stories";
-  if (t.includes("plan") || t.includes("checklist")) return "Plan";
-
-  return "Brief";
-}
-
-function formatInline(text: string) {
-  return text
-    .replace(/\*\*/g, "")
-    .replace(/^[-*]\s+/, "")
-    .trim();
-}
-
-function parseSectionBlocks(content: string) {
-  const lines = content.split("\n");
-  const blocks: { kind: string; text: string }[] = [];
-  let paragraph: string[] = [];
-
-  function flushParagraph() {
-    const text = paragraph.join(" ").trim();
-    if (text) blocks.push({ kind: "paragraph", text });
-    paragraph = [];
-  }
-
-  for (const raw of lines) {
-    const line = raw.trim();
-
-    if (!line) {
-      flushParagraph();
-      continue;
-    }
-
-    if (line.startsWith("### ")) {
-      flushParagraph();
-      blocks.push({ kind: "h3", text: line.replace(/^###\s+/, "").trim() });
-      continue;
-    }
-
-    if (line.startsWith("#### ")) {
-      flushParagraph();
-      blocks.push({ kind: "h4", text: line.replace(/^####\s+/, "").trim() });
-      continue;
-    }
-
-    if (/^\d+\.\s+/.test(line)) {
-      flushParagraph();
-      blocks.push({ kind: "numbered", text: line.replace(/^\d+\.\s+/, "").trim() });
-      continue;
-    }
-
-    if (line.startsWith("- ") || line.startsWith("* ")) {
-      flushParagraph();
-      blocks.push({ kind: "bullet", text: formatInline(line) });
-      continue;
-    }
-
-    if (line.startsWith("{") || line.startsWith("}") || line.includes('":')) {
-      flushParagraph();
-      blocks.push({ kind: "code", text: line });
-      continue;
-    }
-
-    paragraph.push(formatInline(line));
-  }
-
-  flushParagraph();
-  return blocks;
-}
+const emptyModules = MODULES.reduce((acc, item) => {
+  acc[item.name] = { jobId: "", status: "idle", stage: "Not started", progress: 0 };
+  return acc;
+}, {} as Record<ModuleName, ModuleState>);
 
 function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function RenderSection({ title, content }: { title: string; content: string }) {
-  const blocks = parseSectionBlocks(content);
-  const tone = sectionTone(title);
-
-  return (
-    <article className="overflow-hidden rounded-[2rem] border border-white/10 bg-[#0b0b0a]/80 shadow-2xl shadow-black/30">
-      <div className="border-b border-white/10 bg-white/[0.025] px-6 py-5 sm:px-8">
-        <div className="mb-3 inline-flex rounded-full border border-[#c9a96a]/25 bg-[#c9a96a]/10 px-3 py-1 text-[11px] uppercase tracking-[0.28em] text-[#f2dfb8]/80">
-          {tone}
-        </div>
-        <h2 className="text-3xl font-semibold tracking-[-0.055em] text-white sm:text-4xl">
-          {prettyTitle(title)}
-        </h2>
-      </div>
-
-      <div className="space-y-4 px-6 py-7 sm:px-8">
-        {blocks.map((block, index) => {
-          if (block.kind === "h3") {
-            return (
-              <h3 key={index} className="pt-4 text-xl font-semibold tracking-[-0.035em] text-white">
-                {block.text}
-              </h3>
-            );
-          }
-
-          if (block.kind === "h4") {
-            return (
-              <h4 key={index} className="pt-2 text-base font-semibold tracking-[-0.02em] text-[#f2dfb8]">
-                {block.text}
-              </h4>
-            );
-          }
-
-          if (block.kind === "numbered") {
-            return (
-              <div key={index} className="group rounded-2xl border border-white/10 bg-white/[0.035] p-4 transition hover:border-[#c9a96a]/30 hover:bg-white/[0.055]">
-                <div className="mb-2 text-[10px] uppercase tracking-[0.28em] text-white/35">
-                  Point {index + 1}
-                </div>
-                <p className="leading-8 text-white/78">{block.text}</p>
-              </div>
-            );
-          }
-
-          if (block.kind === "bullet") {
-            return (
-              <div key={index} className="flex gap-3 rounded-2xl bg-white/[0.02] px-4 py-3">
-                <span className="mt-3 h-1.5 w-1.5 shrink-0 rounded-full bg-[#c9a96a]" />
-                <p className="leading-8 text-white/76">{block.text}</p>
-              </div>
-            );
-          }
-
-          if (block.kind === "code") {
-            return (
-              <pre key={index} className="overflow-auto rounded-2xl border border-white/10 bg-black/50 p-4 text-xs leading-6 text-white/50">
-                {block.text}
-              </pre>
-            );
-          }
-
-          return (
-            <p key={index} className="leading-8 text-white/74">
-              {block.text}
-            </p>
-          );
-        })}
-      </div>
-    </article>
-  );
+function cleanText(value: string) {
+  return value.replace(/\r/g, "\n").replace(/[ \t]{2,}/g, " ").replace(/\n{4,}/g, "\n\n\n").trim();
 }
 
+function readableJson(value: unknown) {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  return JSON.stringify(value, null, 2);
+}
 
-export default function Home() {
-  const [companyName, setCompanyName] = useState("Google");
-  const [roleName, setRoleName] = useState("Program Manager");
-  const [jobDescription, setJobDescription] = useState("");
-  const [cv, setCv] = useState("");
-  const [answerBank, setAnswerBank] = useState("");
-  const [youtubeTranscripts, setYoutubeTranscripts] = useState("");
-  const [companyDescription, setCompanyDescription] = useState("");
-  const [extra, setExtra] = useState(
-    "Create a detailed interview prep pack and Lua mock interview brief. Build top 1 percent CV-plausible answers later: realistic for the candidate's background, with believable metrics and a clear winning process."
-  );
-  const [jobUpload, setJobUpload] = useState<UploadState | null>(null);
-  const [cvUpload, setCvUpload] = useState<UploadState | null>(null);
-  const [answerUpload, setAnswerUpload] = useState<UploadState | null>(null);
-  const [youtubeUpload, setYoutubeUpload] = useState<UploadState | null>(null);
-  const [extraUpload, setExtraUpload] = useState<UploadState | null>(null);
-  const [extracting, setExtracting] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<Result | null>(null);
-  const [error, setError] = useState("");
-  const [activeSection, setActiveSection] = useState("");
-  const [jobId, setJobId] = useState("");
-  const [jobStage, setJobStage] = useState("");
-  const [jobProgress, setJobProgress] = useState(0);
-  const [jobStatus, setJobStatus] = useState("");
-
-  const sections = useMemo(() => splitPack(result?.markdown || ""), [result?.markdown]);
-  const currentSection =
-    sections.find((section) => section.title === activeSection) || sections[0];
-
-  async function extractIntoTextarea(
-    file: File,
-    currentText: string,
-    setText: (value: string) => void,
-    setUpload: (value: UploadState | null) => void,
-    label: string
-  ) {
-    setError("");
-    setExtracting(label);
-
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const res = await fetch("/api/extract", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data?.message || data?.error || "Could not extract file.");
-      }
-
-      const header = `\n\n[Uploaded file: ${data.fileName}]\n`;
-      const nextText = `${currentText.trim()}${header}${data.text}`.trim();
-
-      setText(nextText);
-      setUpload({
-        fileName: data.fileName,
-        characters: data.characters,
-        warning: data.warning || "",
-      });
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Could not extract file.");
-    } finally {
-      setExtracting("");
-    }
-  }
-
-  async function handleSubmit() {
-    setLoading(true);
-    setError("");
-    setResult(null);
-    setActiveSection("");
-    setJobId("");
-    setJobStage("Creating job");
-    setJobProgress(0);
-    setJobStatus("queued");
-
-    try {
-      const res = await fetch("/api/prepare/start", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          company_name: companyName,
-          role_name: roleName,
-          job_description: jobDescription,
-          cv,
-          answer_bank: answerBank,
-          youtube_transcripts: youtubeTranscripts,
-          company_description: companyDescription,
-          extra
-        })
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        const detail =
-          typeof data?.detail === "string"
-            ? data.detail
-            : data?.body || data?.message || JSON.stringify(data?.detail || data);
-
-        throw new Error(`${data?.error || "Request failed"}: ${detail}`);
-      }
-
-      const startData = data as JobStatus;
-      setJobId(startData.job_id);
-      setJobStatus(startData.status || "queued");
-      setJobStage(startData.stage || "Job created");
-      setJobProgress(startData.progress || 0);
-
-      for (;;) {
-        await wait(3000);
-
-        const statusRes = await fetch(`/api/prepare/status?job_id=${encodeURIComponent(startData.job_id)}`, {
-          method: "GET",
-          cache: "no-store",
-        });
-        const statusData = (await statusRes.json()) as JobStatus;
-
-        if (!statusRes.ok) {
-          const detail = statusData?.error || JSON.stringify(statusData);
-          throw new Error(`Status request failed: ${detail}`);
-        }
-
-        setJobStatus(statusData.status || "running");
-        setJobStage(statusData.stage || "Working");
-        setJobProgress(Number(statusData.progress || 0));
-
-        if (statusData.status === "done") {
-          setResult({
-            status: "done",
-            output_file: statusData.output_file,
-            markdown: statusData.markdown || "",
-            product_json: statusData.product_json,
-          });
-          break;
-        }
-
-        if (statusData.status === "failed") {
-          throw new Error(statusData.error || "Prep job failed.");
-        }
-      }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function cleanPastedText(value: string) {
-    return value
-      .replace(/\r/g, "\n")
-      .replace(/[ \t]{2,}/g, " ")
-      .replace(/\n{4,}/g, "\n\n\n")
-      .trim();
-  }
-
-  const canSubmit = companyName.trim() && roleName.trim() && jobDescription.trim() && cv.trim();
-
-  return (
-    <main className="min-h-screen bg-[#0a0a0a] text-[#f5f0e8]">
-      <section className="px-6 py-8">
-        <div className="mx-auto max-w-[1500px]">
-          <nav className="flex items-center justify-between border-b border-[#2a2a2a] pb-6">
-            <div>
-              <img
-                src="/nailit-logo-final.png?v=2"
-                alt="Nailit"
-                className="h-10 w-auto object-contain"
-              />
-              <p className="mt-2 text-sm text-[#f5f0e8]/45">
-                Interview strategy for people who want the offer.
-              </p>
-            </div>
-
-            <div className="hidden items-center gap-3 rounded-full border border-[#2a2a2a] bg-[#141414] px-4 py-2 text-sm text-[#f5f0e8]/60 md:flex">
-              <span className="h-2 w-2 rounded-full bg-[#c9a96e]" />
-              Secure prep workspace
-            </div>
-          </nav>
-
-          <header className="grid gap-8 py-12 lg:grid-cols-[0.8fr_1.2fr] lg:items-end">
-            <div>
-              <p className="text-sm uppercase tracking-[0.35em] text-[#c9a96e]">
-                Career prep, sharpened
-              </p>
-
-              <h1 className="mt-5 max-w-3xl text-5xl font-semibold leading-[0.98] tracking-[-0.06em] text-[#f5f0e8] md:text-7xl">
-                Walk into the interview with a plan.
-              </h1>
-            </div>
-
-            <div className="max-w-2xl lg:ml-auto">
-              <p className="text-lg leading-8 text-[#f5f0e8]/62">
-                Upload the role, CV, prepared stories, and company context. Nailit turns the material into a private interview strategy pack.
-              </p>
-
-              <div className="mt-6 grid gap-3 sm:grid-cols-3">
-                <MiniCard number="01" label="Extract" />
-                <MiniCard number="02" label="Review" />
-                <MiniCard number="03" label="Generate" />
-              </div>
-            </div>
-          </header>
-
-          <section className="rounded-[2rem] border border-[#2a2a2a] bg-[#141414] p-4 shadow-2xl shadow-black/60">
-            <div className="rounded-[1.5rem] border border-[#2a2a2a] bg-[#141414] p-5 md:p-8">
-              <div className="flex flex-col justify-between gap-5 border-b border-[#2a2a2a] pb-6 md:flex-row md:items-start">
-                <div>
-                  <h2 className="text-3xl font-semibold tracking-[-0.04em]">
-                    Build your prep pack
-                  </h2>
-                  <p className="mt-2 max-w-3xl text-sm leading-6 text-[#f5f0e8]/48">
-                    Upload files or paste text manually. Extracted text is placed into the text boxes so you can verify the content before Nailit uses it.
-                  </p>
-                </div>
-
-                <button
-                  onClick={handleSubmit}
-                  disabled={loading || extracting !== "" || !canSubmit}
-                  className="rounded-2xl bg-[#c9a96e] px-8 py-4 text-base font-semibold text-[#0a0a0a] transition hover:bg-[#f5f0e8] disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {loading ? "Building..." : extracting ? "Reading file..." : "Create prep pack"}
-                </button>
-              </div>
-
-              <div className="mt-7 grid gap-5 lg:grid-cols-2">
-                <div className="grid gap-5">
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <Field label="Company">
-                      <input
-                        className="input"
-                        value={companyName}
-                        onChange={(e) => setCompanyName(e.target.value)}
-                      />
-                    </Field>
-
-                    <Field label="Role">
-                      <input
-                        className="input"
-                        value={roleName}
-                        onChange={(e) => setRoleName(e.target.value)}
-                      />
-                    </Field>
-                  </div>
-
-                  <Field label="Job description">
-                    <FileUpload
-                      label="Upload job description"
-                      upload={jobUpload}
-                      busy={extracting === "job"}
-                      onFile={(file) =>
-                        extractIntoTextarea(file, jobDescription, setJobDescription, setJobUpload, "job")
-                      }
-                    />
-                    <div className="flex justify-end">
-                      <button
-                        type="button"
-                        onClick={() => setJobDescription(cleanPastedText(jobDescription))}
-                        className="rounded-xl border border-[#2a2a2a] px-3 py-2 text-xs text-[#f5f0e8]/58 hover:text-[#f5f0e8]"
-                      >
-                        Clean text
-                      </button>
-                    </div>
-                    <textarea
-                      className="textarea min-h-[520px]"
-                      value={jobDescription}
-                      onChange={(e) => setJobDescription(e.target.value)}
-                      placeholder="Paste the full job description here, or upload a file above"
-                    />
-                  </Field>
-                </div>
-
-                <div className="grid gap-5">
-                  <Field label="CV">
-                    <FileUpload
-                      label="Upload CV"
-                      upload={cvUpload}
-                      busy={extracting === "cv"}
-                      onFile={(file) =>
-                        extractIntoTextarea(file, cv, setCv, setCvUpload, "cv")
-                      }
-                    />
-                    <div className="flex justify-end">
-                      <button
-                        type="button"
-                        onClick={() => setCv(cleanPastedText(cv))}
-                        className="rounded-xl border border-[#2a2a2a] px-3 py-2 text-xs text-[#f5f0e8]/58 hover:text-[#f5f0e8]"
-                      >
-                        Clean text
-                      </button>
-                    </div>
-                    <textarea
-                      className="textarea min-h-[520px]"
-                      value={cv}
-                      onChange={(e) => setCv(e.target.value)}
-                      placeholder="Paste the full CV here, or upload a file above"
-                    />
-                  </Field>
-
-                  <Field label="Your prepared answers and stories (optional)">
-                    <FileUpload
-                      label="Upload prepared answers"
-                      upload={answerUpload}
-                      busy={extracting === "answer_bank"}
-                      onFile={(file) =>
-                        extractIntoTextarea(file, answerBank, setAnswerBank, setAnswerUpload, "answer_bank")
-                      }
-                    />
-                    <div className="flex justify-end">
-                      <button
-                        type="button"
-                        onClick={() => setAnswerBank(cleanPastedText(answerBank))}
-                        className="rounded-xl border border-[#2a2a2a] px-3 py-2 text-xs text-[#f5f0e8]/58 hover:text-[#f5f0e8]"
-                      >
-                        Clean text
-                      </button>
-                    </div>
-                    <textarea
-                      className="textarea min-h-[300px]"
-                      value={answerBank}
-                      onChange={(e) => setAnswerBank(e.target.value)}
-                      placeholder="Paste prepared answers, interview stories, achievements, project notes, or examples you want Nailit to use"
-                    />
-                  </Field>
-
-                  <Field
-                    label="YouTube Interview Transcripts (optional)"
-                    description="Paste transcripts from Google PM interview videos, candidate experiences, or any relevant YouTube content. The more the better."
-                  >
-                    <FileUpload
-                      label="Upload YouTube transcripts"
-                      upload={youtubeUpload}
-                      busy={extracting === "youtube_transcripts"}
-                      onFile={(file) =>
-                        extractIntoTextarea(file, youtubeTranscripts, setYoutubeTranscripts, setYoutubeUpload, "youtube_transcripts")
-                      }
-                    />
-                    <p className="rounded-xl border border-[#c9a96e]/20 bg-[#c9a96e]/10 px-3 py-2 text-xs leading-5 text-[#f2dfb8]/75">
-                      Tip: get transcripts free from any YouTube video by clicking the three dots under the video and selecting Open Transcript.
-                    </p>
-                    <div className="flex justify-end">
-                      <button
-                        type="button"
-                        onClick={() => setYoutubeTranscripts(cleanPastedText(youtubeTranscripts))}
-                        className="rounded-xl border border-[#2a2a2a] px-3 py-2 text-xs text-[#f5f0e8]/58 hover:text-[#f5f0e8]"
-                      >
-                        Clean text
-                      </button>
-                    </div>
-                    <textarea
-                      className="textarea min-h-[320px]"
-                      value={youtubeTranscripts}
-                      onChange={(e) => setYoutubeTranscripts(e.target.value)}
-                      placeholder="Paste YouTube transcripts, candidate interview experiences, or video notes here"
-                    />
-                  </Field>
-
-                  <Field label="Additional company context (optional)">
-                    <textarea
-                      className="textarea min-h-[180px]"
-                      value={companyDescription}
-                      onChange={(e) => setCompanyDescription(e.target.value)}
-                      placeholder="Paste extra company notes, team details, recruiter context, interview hints, or anything you already know"
-                    />
-                  </Field>
-
-                  <Field label="Extra instructions">
-                    <FileUpload
-                      label="Upload extra notes"
-                      upload={extraUpload}
-                      busy={extracting === "extra"}
-                      onFile={(file) =>
-                        extractIntoTextarea(file, extra, setExtra, setExtraUpload, "extra")
-                      }
-                    />
-                    <div className="flex justify-end">
-                      <button
-                        type="button"
-                        onClick={() => setExtra(cleanPastedText(extra))}
-                        className="rounded-xl border border-[#2a2a2a] px-3 py-2 text-xs text-[#f5f0e8]/58 hover:text-[#f5f0e8]"
-                      >
-                        Clean text
-                      </button>
-                    </div>
-                    <textarea
-                      className="textarea min-h-[260px]"
-                      value={extra}
-                      onChange={(e) => setExtra(e.target.value)}
-                      placeholder="Add any specific instruction, concern, or preference for this prep pack"
-                    />
-                  </Field>
-                </div>
-              </div>
-
-              {error && (
-                <div className="mt-6 rounded-2xl border border-red-400/20 bg-red-500/10 p-4 text-red-100">
-                  {error}
-                </div>
-              )}
-
-              {(loading || jobId) && !result && !error && (
-                <div className="mt-6 rounded-2xl border border-[#c9a96e]/30 bg-[#0a0a0a] p-5">
-                  <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.3em] text-[#c9a96e]">
-                        {jobStatus || "queued"}
-                      </p>
-                      <h3 className="mt-2 text-xl font-semibold text-[#f5f0e8]">
-                        {jobStage || "Creating job"}
-                      </h3>
-                      {jobId && (
-                        <p className="mt-1 text-xs text-[#f5f0e8]/42">
-                          Job ID: {jobId}
-                        </p>
-                      )}
-                    </div>
-                    <div className="text-2xl font-semibold text-[#c9a96e]">
-                      {Math.max(0, Math.min(100, Math.round(jobProgress)))}%
-                    </div>
-                  </div>
-                  <div className="mt-4 h-2 overflow-hidden rounded-full bg-[#1e1e1e]">
-                    <div
-                      className="h-full rounded-full bg-[#c9a96e] transition-all duration-500"
-                      style={{ width: `${Math.max(3, Math.min(100, jobProgress || 3))}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-          </section>
-
-          {result && (
-            <section className="py-10">
-              <div className="rounded-[2rem] border border-[#2a2a2a] bg-[#141414] p-5 md:p-8">
-                <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
-                  <div>
-                    <p className="text-sm uppercase tracking-[0.3em] text-[#c9a96e]">
-                      Ready
-                    </p>
-                    <h2 className="mt-3 text-4xl font-semibold tracking-[-0.05em]">
-                      Your prep pack is ready.
-                    </h2>
-                    {result.output_file && (
-                      <p className="mt-2 text-sm text-white/45">
-                        Generated file: {result.output_file}
-                      </p>
-                    )}
-                  </div>
-
-                  {result.markdown && (
-                    <button
-                      onClick={() => navigator.clipboard.writeText(result.markdown || "")}
-                      className="rounded-2xl bg-[#c9a96e] px-5 py-3 text-sm font-semibold text-[#0a0a0a] transition hover:bg-[#f5f0e8]"
-                    >
-                      Copy full pack
-                    </button>
-                  )}
-                </div>
-
-                {sections.length > 0 && currentSection && (
-                  <div className="mt-8 grid gap-5 xl:grid-cols-[340px_1fr]">
-                    <aside className="rounded-3xl border border-[#2a2a2a] bg-[#0a0a0a] p-4">
-                      <p className="px-3 pb-3 text-sm font-semibold text-[#f5f0e8]">
-                        Inside this pack
-                      </p>
-
-                      <div className="flex gap-2 overflow-x-auto pb-2 xl:block xl:space-y-2 xl:overflow-visible xl:pb-0">
-                        {sections.map((section) => {
-                          const selected = section.title === currentSection.title;
-
-                          return (
-                            <button
-                              key={section.title}
-                              onClick={() => setActiveSection(section.title)}
-                              className={`shrink-0 rounded-full px-4 py-3 text-left text-sm transition xl:w-full xl:rounded-2xl ${
-                                selected
-                                  ? "bg-[#c9a96e] text-[#0a0a0a]"
-                                  : "border border-[#2a2a2a] text-[#f5f0e8]/50 hover:border-[#c9a96e]/45 hover:text-[#f5f0e8]"
-                              }`}
-                            >
-                              {prettyTitle(section.title)}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </aside>
-
-                    <article className="rounded-3xl border border-[#2a2a2a] bg-[#0a0a0a] p-6 md:p-9">
-                      <p className="text-sm uppercase tracking-[0.28em] text-[#c9a96e]">
-                        Section
-                      </p>
-                      <h3 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-white">
-                        {prettyTitle(currentSection.title)}
-                      </h3>
-                      <div className="mt-8 max-h-[820px] overflow-auto pr-4">
-                        <RenderSection title={currentSection.title} content={currentSection.content} />
-                      </div>
-                    </article>
-                  </div>
-                )}
-              </div>
-            </section>
-          )}
-        </div>
-      </section>
-
-      <style jsx global>{`
-        .input {
-          width: 100%;
-          border-radius: 1rem;
-          border: 1px solid #2a2a2a;
-          background: #1e1e1e;
-          padding: 1rem;
-          color: #f5f0e8;
-          outline: none;
-          font-size: 1rem;
-        }
-
-        .textarea {
-          width: 100%;
-          resize: vertical;
-          border-radius: 1rem;
-          border: 1px solid #2a2a2a;
-          background: #1e1e1e;
-          padding: 1rem;
-          color: #f5f0e8;
-          outline: none;
-          font-size: 1rem;
-          line-height: 1.65;
-        }
-
-        .input:focus,
-        .textarea:focus {
-          border-color: #c9a96e;
-          box-shadow: 0 0 0 4px rgba(201, 169, 110, 0.16);
-        }
-
-        .input::placeholder,
-        .textarea::placeholder {
-          color: rgba(245, 240, 232, 0.32);
-        }
-      `}</style>
-    </main>
-  );
+function splitMarkdown(markdown: string) {
+  const parts = markdown.split(/\n(?=## )/g).filter(Boolean);
+  return parts.length ? parts : [markdown];
 }
 
 function Field({
@@ -789,29 +114,14 @@ function Field({
 }: {
   label: string;
   description?: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
-    <label className="grid gap-3">
-      <span>
-        <span className="block text-sm text-white/60">{label}</span>
-        {description && (
-          <span className="mt-1 block text-xs leading-5 text-white/38">
-            {description}
-          </span>
-        )}
-      </span>
-      {children}
+    <label className="block">
+      <span className="text-sm font-semibold text-[#f5f0e8]">{label}</span>
+      {description && <span className="mt-1 block text-xs leading-5 text-[#f5f0e8]/48">{description}</span>}
+      <div className="mt-3 space-y-3">{children}</div>
     </label>
-  );
-}
-
-function MiniCard({ number, label }: { number: string; label: string }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-      <p className="text-2xl font-semibold text-white">{number}</p>
-      <p className="mt-2 text-sm text-white/50">{label}</p>
-    </div>
   );
 }
 
@@ -827,44 +137,383 @@ function FileUpload({
   onFile: (file: File) => void;
 }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+    <div className="rounded-xl border border-[#2a2a2a] bg-[#0a0a0a] p-3">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-sm font-medium text-white/75">{label}</p>
-          <p className="mt-1 text-xs text-white/35">
-            PDF, DOCX, TXT, MD, RTF, or CSV. Text appears below for review.
-          </p>
-        </div>
-
-        <label className="cursor-pointer rounded-xl border border-[#c9a96a]/35 bg-[#c9a96a]/10 px-4 py-2 text-sm font-semibold text-[#f5e6c8] transition hover:bg-[#c9a96a]/20">
-          {busy ? "Reading..." : "Choose file"}
-          <input
-            type="file"
-            className="hidden"
-            accept=".pdf,.docx,.txt,.md,.rtf,.csv"
-            disabled={busy}
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) onFile(file);
-              e.target.value = "";
-            }}
-          />
-        </label>
-      </div>
-
-      {upload && (
-        <div className="mt-3 rounded-xl bg-black/40 px-3 py-3 text-sm text-white/60">
-          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-            <span className="truncate">{upload.fileName}</span>
-            <span>{upload.characters.toLocaleString()} characters extracted</span>
-          </div>
-          {upload.warning && (
-            <p className="mt-2 text-xs leading-5 text-amber-200">
-              {upload.warning}
+          <p className="text-xs font-semibold text-[#f5f0e8]/70">{busy ? "Reading file..." : label}</p>
+          {upload && (
+            <p className="mt-1 text-xs text-[#f5f0e8]/42">
+              {upload.fileName} · {upload.characters.toLocaleString()} characters
             </p>
           )}
         </div>
-      )}
+        <input
+          type="file"
+          disabled={busy}
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) onFile(file);
+            event.currentTarget.value = "";
+          }}
+          className="text-xs text-[#f5f0e8]/50 file:mr-3 file:rounded-lg file:border-0 file:bg-[#c9a96e] file:px-3 file:py-2 file:text-xs file:font-semibold file:text-[#0a0a0a]"
+        />
+      </div>
+      {upload?.warning && <p className="mt-2 text-xs text-[#c9a96e]">{upload.warning}</p>}
     </div>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const tone =
+    status === "done"
+      ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-100"
+      : status === "running" || status === "queued"
+        ? "border-[#c9a96e]/30 bg-[#c9a96e]/10 text-[#f2dfb8]"
+        : status === "failed"
+          ? "border-red-400/25 bg-red-500/10 text-red-100"
+          : "border-[#2a2a2a] bg-[#0a0a0a] text-[#f5f0e8]/45";
+  return <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${tone}`}>{status}</span>;
+}
+
+export default function Home() {
+  const [screen, setScreen] = useState<"setup" | "dashboard">("setup");
+  const [session, setSession] = useState<SessionMeta | null>(null);
+  const [companyName, setCompanyName] = useState("Google");
+  const [roleName, setRoleName] = useState("Program Manager");
+  const [jobDescription, setJobDescription] = useState("");
+  const [cv, setCv] = useState("");
+  const [answerBank, setAnswerBank] = useState("");
+  const [companyContext, setCompanyContext] = useState("");
+  const [youtubeTranscripts, setYoutubeTranscripts] = useState("");
+  const [uploads, setUploads] = useState<Record<string, UploadState | null>>({});
+  const [extracting, setExtracting] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [modules, setModules] = useState<Record<ModuleName, ModuleState>>(emptyModules);
+  const [activeModule, setActiveModule] = useState<ModuleName | "prep_pack" | "">("");
+
+  useEffect(() => {
+    const saved = localStorage.getItem("nailit_session");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as SessionMeta;
+        if (parsed.session_id) {
+          setSession(parsed);
+          setCompanyName(parsed.company_name || "");
+          setRoleName(parsed.role_name || "");
+          setScreen("dashboard");
+        }
+      } catch {
+        localStorage.removeItem("nailit_session");
+      }
+    }
+  }, []);
+
+  const canSave = companyName.trim() && roleName.trim() && jobDescription.trim() && cv.trim();
+  const completed = useMemo(() => {
+    return MODULES.reduce((acc, item) => {
+      acc[item.name] = modules[item.name]?.status === "done";
+      return acc;
+    }, {} as Record<ModuleName, boolean>);
+  }, [modules]);
+
+  async function extractIntoTextarea(file: File, key: string, currentText: string, setText: (value: string) => void) {
+    setError("");
+    setExtracting(key);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/extract", { method: "POST", body: formData });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || data?.error || "Could not extract file.");
+      const nextText = `${currentText.trim()}\n\n[Uploaded file: ${data.fileName}]\n${data.text}`.trim();
+      setText(nextText);
+      setUploads((current) => ({
+        ...current,
+        [key]: { fileName: data.fileName, characters: data.characters, warning: data.warning || "" },
+      }));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not extract file.");
+    } finally {
+      setExtracting("");
+    }
+  }
+
+  async function createSession() {
+    setSaving(true);
+    setError("");
+    try {
+      const res = await fetch("/api/session/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company_name: companyName,
+          role_name: roleName,
+          job_description: jobDescription,
+          cv,
+          answer_bank: answerBank,
+          company_description: companyContext,
+          youtube_transcripts: youtubeTranscripts,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.body || data?.message || data?.error || "Could not create session.");
+      const nextSession: SessionMeta = {
+        session_id: data.session_id,
+        company_name: data.company_name || companyName,
+        role_name: data.role_name || roleName,
+        created_at: data.created_at,
+      };
+      setSession(nextSession);
+      localStorage.setItem("nailit_session", JSON.stringify(nextSession));
+      setModules(emptyModules);
+      setScreen("dashboard");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not create session.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function pollModule(moduleName: ModuleName, jobId: string) {
+    for (;;) {
+      await wait(3000);
+      const res = await fetch(`/api/module/status?job_id=${encodeURIComponent(jobId)}`, { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.body || data?.message || data?.error || "Could not read module status.");
+      setModules((current) => ({
+        ...current,
+        [moduleName]: {
+          ...current[moduleName],
+          jobId,
+          status: data.status || "running",
+          stage: data.stage || "Working",
+          progress: Number(data.progress || 0),
+          result: data.product_json,
+          markdown: data.markdown || "",
+          error: data.error || "",
+        },
+      }));
+      if (data.status === "done") return;
+      if (data.status === "failed") throw new Error(data.error || `${moduleName} failed.`);
+    }
+  }
+
+  async function runModule(moduleName: ModuleName) {
+    if (!session) return;
+    setError("");
+    setModules((current) => ({
+      ...current,
+      [moduleName]: { ...current[moduleName], status: "queued", stage: "Starting", progress: 1, error: "" },
+    }));
+    try {
+      const res = await fetch("/api/module/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: session.session_id, module_name: moduleName }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.body || data?.message || data?.error || "Could not start module.");
+      setModules((current) => ({
+        ...current,
+        [moduleName]: {
+          ...current[moduleName],
+          jobId: data.job_id,
+          status: data.status || "queued",
+          stage: data.stage || "Job created",
+          progress: Number(data.progress || 0),
+        },
+      }));
+      await pollModule(moduleName, data.job_id);
+      setActiveModule(moduleName);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : `${moduleName} failed.`;
+      setError(message);
+      setModules((current) => ({
+        ...current,
+        [moduleName]: { ...current[moduleName], status: "failed", stage: "Failed", progress: 100, error: message },
+      }));
+    }
+  }
+
+  function moduleLocked(item: (typeof MODULES)[number]) {
+    if (!session) return true;
+    return Boolean(item.dependsOn?.some((dependency) => !completed[dependency]));
+  }
+
+  function resetSession() {
+    localStorage.removeItem("nailit_session");
+    setSession(null);
+    setModules(emptyModules);
+    setActiveModule("");
+    setScreen("setup");
+  }
+
+  const activeState = activeModule ? modules[activeModule] : null;
+  const markdownSections = activeState?.markdown ? splitMarkdown(activeState.markdown) : [];
+
+  return (
+    <main className="min-h-screen bg-[#0a0a0a] text-[#f5f0e8]">
+      <div className="mx-auto max-w-[1500px] px-6 py-8">
+        <nav className="flex flex-col justify-between gap-4 border-b border-[#2a2a2a] pb-6 md:flex-row md:items-center">
+          <div>
+            <img src="/nailit-logo-final.png?v=2" alt="Nailit" className="h-10 w-auto object-contain" />
+            <p className="mt-2 text-sm text-[#f5f0e8]/45">Interview intelligence, built in modules.</p>
+          </div>
+          <div className="flex gap-3">
+            {session && (
+              <button onClick={resetSession} className="rounded-xl border border-[#2a2a2a] px-4 py-2 text-sm text-[#f5f0e8]/65 hover:border-[#c9a96e]/50">
+                New Session
+              </button>
+            )}
+          </div>
+        </nav>
+
+        {screen === "setup" && (
+          <section className="py-10">
+            <div className="mb-8">
+              <p className="text-sm uppercase tracking-[0.35em] text-[#c9a96e]">Setup</p>
+              <h1 className="mt-4 text-5xl font-semibold tracking-[-0.06em] md:text-7xl">Store the source truth once.</h1>
+              <p className="mt-5 max-w-3xl text-lg leading-8 text-[#f5f0e8]/58">
+                Nailit saves the JD, CV, prepared stories, company context, and transcripts in a session. Every module reads the originals from Daytona, so the build does not lose context.
+              </p>
+            </div>
+
+            <section className="rounded-[1.75rem] border border-[#2a2a2a] bg-[#141414] p-5 md:p-8">
+              <div className="flex flex-col justify-between gap-4 border-b border-[#2a2a2a] pb-6 md:flex-row md:items-center">
+                <div>
+                  <h2 className="text-3xl font-semibold tracking-[-0.04em]">Create session</h2>
+                  <p className="mt-2 text-sm text-[#f5f0e8]/48">No AI calls happen here. This is pure document storage.</p>
+                </div>
+                <button
+                  onClick={createSession}
+                  disabled={!canSave || saving || Boolean(extracting)}
+                  className="rounded-2xl bg-[#c9a96e] px-7 py-4 text-sm font-bold text-[#0a0a0a] transition hover:bg-[#f5f0e8] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {saving ? "Saving..." : "Save and Begin Research"}
+                </button>
+              </div>
+
+              <div className="mt-7 grid gap-5 lg:grid-cols-2">
+                <div className="space-y-5">
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <Field label="Company Name">
+                      <input className="w-full rounded-xl border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-3 text-[#f5f0e8] outline-none focus:border-[#c9a96e]" value={companyName} onChange={(event) => setCompanyName(event.target.value)} />
+                    </Field>
+                    <Field label="Role Name">
+                      <input className="w-full rounded-xl border border-[#2a2a2a] bg-[#1e1e1e] px-4 py-3 text-[#f5f0e8] outline-none focus:border-[#c9a96e]" value={roleName} onChange={(event) => setRoleName(event.target.value)} />
+                    </Field>
+                  </div>
+                  <Field label="Job Description">
+                    <FileUpload label="Upload job description" upload={uploads.jd || null} busy={extracting === "jd"} onFile={(file) => extractIntoTextarea(file, "jd", jobDescription, setJobDescription)} />
+                    <button type="button" onClick={() => setJobDescription(cleanText(jobDescription))} className="rounded-lg border border-[#2a2a2a] px-3 py-2 text-xs text-[#f5f0e8]/55">Clean text</button>
+                    <textarea className="min-h-[520px] w-full rounded-xl border border-[#2a2a2a] bg-[#1e1e1e] p-4 leading-7 text-[#f5f0e8] outline-none focus:border-[#c9a96e]" value={jobDescription} onChange={(event) => setJobDescription(event.target.value)} />
+                  </Field>
+                </div>
+
+                <div className="space-y-5">
+                  <Field label="CV">
+                    <FileUpload label="Upload CV" upload={uploads.cv || null} busy={extracting === "cv"} onFile={(file) => extractIntoTextarea(file, "cv", cv, setCv)} />
+                    <button type="button" onClick={() => setCv(cleanText(cv))} className="rounded-lg border border-[#2a2a2a] px-3 py-2 text-xs text-[#f5f0e8]/55">Clean text</button>
+                    <textarea className="min-h-[420px] w-full rounded-xl border border-[#2a2a2a] bg-[#1e1e1e] p-4 leading-7 text-[#f5f0e8] outline-none focus:border-[#c9a96e]" value={cv} onChange={(event) => setCv(event.target.value)} />
+                  </Field>
+                  <Field label="Answer Bank" description="Paste your prepared stories here, one per paragraph.">
+                    <FileUpload label="Upload prepared stories" upload={uploads.answer || null} busy={extracting === "answer"} onFile={(file) => extractIntoTextarea(file, "answer", answerBank, setAnswerBank)} />
+                    <textarea className="min-h-[240px] w-full rounded-xl border border-[#2a2a2a] bg-[#1e1e1e] p-4 leading-7 text-[#f5f0e8] outline-none focus:border-[#c9a96e]" value={answerBank} onChange={(event) => setAnswerBank(event.target.value)} />
+                  </Field>
+                  <Field label="Company Context">
+                    <textarea className="min-h-[150px] w-full rounded-xl border border-[#2a2a2a] bg-[#1e1e1e] p-4 leading-7 text-[#f5f0e8] outline-none focus:border-[#c9a96e]" value={companyContext} onChange={(event) => setCompanyContext(event.target.value)} />
+                  </Field>
+                  <Field label="YouTube Transcripts" description="Paste transcripts from relevant interview videos. Tip: open any YouTube video, click the three dots, then Open Transcript.">
+                    <FileUpload label="Upload transcripts" upload={uploads.youtube || null} busy={extracting === "youtube"} onFile={(file) => extractIntoTextarea(file, "youtube", youtubeTranscripts, setYoutubeTranscripts)} />
+                    <textarea className="min-h-[260px] w-full rounded-xl border border-[#2a2a2a] bg-[#1e1e1e] p-4 leading-7 text-[#f5f0e8] outline-none focus:border-[#c9a96e]" value={youtubeTranscripts} onChange={(event) => setYoutubeTranscripts(event.target.value)} />
+                  </Field>
+                </div>
+              </div>
+
+              {error && <div className="mt-6 rounded-xl border border-red-400/20 bg-red-500/10 p-4 text-sm text-red-100">{error}</div>}
+            </section>
+          </section>
+        )}
+
+        {screen === "dashboard" && session && (
+          <section className="py-10">
+            <div className="mb-8 flex flex-col justify-between gap-5 md:flex-row md:items-end">
+              <div>
+                <p className="text-sm uppercase tracking-[0.35em] text-[#c9a96e]">Session Dashboard</p>
+                <h1 className="mt-4 text-5xl font-semibold tracking-[-0.06em]">{session.company_name}</h1>
+                <p className="mt-2 text-xl text-[#f5f0e8]/58">{session.role_name}</p>
+                <p className="mt-2 text-xs text-[#f5f0e8]/35">Session ID: {session.session_id}</p>
+              </div>
+            </div>
+
+            {error && <div className="mb-6 rounded-xl border border-red-400/20 bg-red-500/10 p-4 text-sm text-red-100">{error}</div>}
+
+            <div className="grid gap-5 lg:grid-cols-3">
+              {MODULES.map((item) => {
+                const state = modules[item.name];
+                const locked = moduleLocked(item);
+                const busy = state.status === "queued" || state.status === "running";
+                return (
+                  <article key={item.name} className="rounded-[1.5rem] border border-[#2a2a2a] bg-[#141414] p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <h2 className="text-xl font-semibold tracking-[-0.03em]">{item.title}</h2>
+                      <StatusBadge status={state.status} />
+                    </div>
+                    <p className="mt-3 min-h-[72px] text-sm leading-6 text-[#f5f0e8]/50">{item.description}</p>
+                    <div className="mt-5">
+                      <div className="flex items-center justify-between text-xs text-[#f5f0e8]/42">
+                        <span>{state.stage}</span>
+                        <span>{Math.round(state.progress || 0)}%</span>
+                      </div>
+                      <div className="mt-2 h-2 overflow-hidden rounded-full bg-[#1e1e1e]">
+                        <div className="h-full bg-[#c9a96e] transition-all" style={{ width: `${Math.max(0, Math.min(100, state.progress || 0))}%` }} />
+                      </div>
+                    </div>
+                    <div className="mt-5 flex gap-3">
+                      <button
+                        disabled={locked || busy}
+                        onClick={() => runModule(item.name)}
+                        className="rounded-xl bg-[#c9a96e] px-4 py-3 text-sm font-bold text-[#0a0a0a] transition hover:bg-[#f5f0e8] disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {busy ? "Running..." : item.button}
+                      </button>
+                      {state.status === "done" && (
+                        <button onClick={() => setActiveModule(item.name)} className="rounded-xl border border-[#2a2a2a] px-4 py-3 text-sm text-[#f5f0e8]/70 hover:border-[#c9a96e]/50">
+                          View Results
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+
+            {activeState && (
+              <section className="mt-8 rounded-[1.5rem] border border-[#2a2a2a] bg-[#141414] p-5 md:p-8">
+                <div className="flex flex-col justify-between gap-4 border-b border-[#2a2a2a] pb-5 md:flex-row md:items-center">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.3em] text-[#c9a96e]">Module Output</p>
+                    <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em]">{MODULES.find((item) => item.name === activeModule)?.title}</h2>
+                  </div>
+                  <button onClick={() => setActiveModule("")} className="rounded-xl border border-[#2a2a2a] px-4 py-2 text-sm text-[#f5f0e8]/60">Close</button>
+                </div>
+                {activeState.markdown ? (
+                  <div className="mt-6 grid gap-5">
+                    {markdownSections.map((section, index) => (
+                      <pre key={index} className="whitespace-pre-wrap rounded-xl border border-[#2a2a2a] bg-[#0a0a0a] p-5 text-sm leading-7 text-[#f5f0e8]/75">{section}</pre>
+                    ))}
+                  </div>
+                ) : (
+                  <pre className="mt-6 max-h-[720px] overflow-auto whitespace-pre-wrap rounded-xl border border-[#2a2a2a] bg-[#0a0a0a] p-5 text-sm leading-7 text-[#f5f0e8]/70">
+                    {readableJson(activeState.result)}
+                  </pre>
+                )}
+              </section>
+            )}
+          </section>
+        )}
+      </div>
+    </main>
   );
 }
