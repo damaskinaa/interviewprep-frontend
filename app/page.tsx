@@ -28,6 +28,29 @@ type ModuleState = {
   error?: string;
 };
 
+type AnswerOption = {
+  label: string;
+  full_answer: string;
+  why_it_wins: string;
+  metric_used: string;
+  tradeoff_shown: string;
+  delivery_notes: string;
+};
+
+type QuestionAnswerState = {
+  status: "idle" | "loading" | "done" | "failed";
+  answers: AnswerOption[];
+  selectedAnswer?: AnswerOption;
+  error?: string;
+};
+
+type QuestionContext = {
+  question: string;
+  round_name: string;
+  assigned_story_id: string;
+  assigned_story_title: string;
+};
+
 type UploadState = {
   fileName: string;
   characters: number;
@@ -105,6 +128,79 @@ function readableJson(value: unknown) {
 function splitMarkdown(markdown: string) {
   const parts = markdown.split(/\n(?=## )/g).filter(Boolean);
   return parts.length ? parts : [markdown];
+}
+
+function normalizeQuestion(value: string) {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function hashText(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = Math.imul(31, hash) + value.charCodeAt(index) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function questionId(question: string, roundName: string) {
+  return `q_${hashText(`${roundName}::${question}`)}`;
+}
+
+function selectedAnswerStorageKey(sessionId: string, id: string) {
+  return `nailit_selected_answer:${sessionId}:${id}`;
+}
+
+function isQuestionBankSection(section: string) {
+  const title = section.split("\n")[0]?.toLowerCase() || "";
+  return title.includes("question bank") || title.includes("questions and answers by round");
+}
+
+function parseQuestionBlocks(section: string) {
+  const matches = [...section.matchAll(/^(\d+)\.\s+\*\*(.+?)\*\*/gm)];
+  if (!matches.length) return { intro: section, questions: [] as { block: string; question: string; round_name: string }[] };
+  const intro = section.slice(0, matches[0].index).trim();
+  const questions = matches.map((match, index) => {
+    const start = match.index || 0;
+    const end = matches[index + 1]?.index ?? section.length;
+    const block = section.slice(start, end).trim();
+    const round = block.match(/^\s*-\s*Round:\s*(.+)$/m)?.[1]?.trim() || "";
+    return {
+      block,
+      question: match[2].trim(),
+      round_name: round,
+    };
+  });
+  return { intro, questions };
+}
+
+function strategyQuestionContexts(result: unknown) {
+  const data = result && typeof result === "object" ? result as Record<string, unknown> : {};
+  const rows = [
+    ...(Array.isArray(data.top_10_likely_questions) ? data.top_10_likely_questions : []),
+    ...(Array.isArray(data.top_10_dangerous_questions) ? data.top_10_dangerous_questions : []),
+    ...(Array.isArray(data.questions_by_round)
+      ? data.questions_by_round.flatMap((round) => {
+          if (!round || typeof round !== "object") return [];
+          const roundData = round as Record<string, unknown>;
+          const roundName = String(roundData.round_name || roundData.round || "");
+          const questions = Array.isArray(roundData.questions) ? roundData.questions : [];
+          return questions.map((question) => ({ ...(question as Record<string, unknown>), round: roundName }));
+        })
+      : []),
+  ];
+  return rows.reduce((acc, row) => {
+    if (!row || typeof row !== "object") return acc;
+    const item = row as Record<string, unknown>;
+    const question = String(item.question || "");
+    if (!question) return acc;
+    acc[normalizeQuestion(question)] = {
+      question,
+      round_name: String(item.round || item.round_name || ""),
+      assigned_story_id: String(item.assigned_story_id || ""),
+      assigned_story_title: String(item.assigned_story_title || item.assigned_story || ""),
+    };
+    return acc;
+  }, {} as Record<string, QuestionContext>);
 }
 
 function Field({
@@ -191,6 +287,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [modules, setModules] = useState<Record<ModuleName, ModuleState>>(emptyModules);
   const [activeModule, setActiveModule] = useState<ModuleName | "prep_pack" | "">("");
+  const [answersByQuestion, setAnswersByQuestion] = useState<Record<string, QuestionAnswerState>>({});
 
   useEffect(() => {
     const saved = localStorage.getItem("nailit_session");
@@ -208,6 +305,24 @@ export default function Home() {
       }
     }
   }, []);
+
+  useEffect(() => {
+    if (!session?.session_id) return;
+    const prefix = `nailit_selected_answer:${session.session_id}:`;
+    const restored: Record<string, QuestionAnswerState> = {};
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key?.startsWith(prefix)) continue;
+      try {
+        const selectedAnswer = JSON.parse(localStorage.getItem(key) || "") as AnswerOption;
+        const id = key.slice(prefix.length);
+        restored[id] = { status: "idle", answers: [], selectedAnswer };
+      } catch {
+        localStorage.removeItem(key);
+      }
+    }
+    setAnswersByQuestion(restored);
+  }, [session?.session_id]);
 
   const canSave = companyName.trim() && roleName.trim() && jobDescription.trim() && cv.trim();
   const completed = useMemo(() => {
@@ -346,11 +461,138 @@ export default function Home() {
     setSession(null);
     setModules(emptyModules);
     setActiveModule("");
+    setAnswersByQuestion({});
     setScreen("setup");
   }
 
   const activeState = activeModule ? modules[activeModule] : null;
   const markdownSections = activeState?.markdown ? splitMarkdown(activeState.markdown) : [];
+  const questionContexts = useMemo(() => strategyQuestionContexts(modules.interview_strategy.result), [modules.interview_strategy.result]);
+
+  async function generateAnswersForQuestion(context: QuestionContext) {
+    if (!session) return;
+    const id = questionId(context.question, context.round_name);
+    setError("");
+    setAnswersByQuestion((current) => ({
+      ...current,
+      [id]: { ...(current[id] || { answers: [] }), status: "loading", error: "" },
+    }));
+    try {
+      const res = await fetch("/api/answers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: session.session_id,
+          question: context.question,
+          round_name: context.round_name,
+          assigned_story_id: context.assigned_story_id,
+          assigned_story_title: context.assigned_story_title,
+          company_name: session.company_name,
+          role_name: session.role_name,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.body || data?.message || data?.error || "Could not generate answers.");
+      setAnswersByQuestion((current) => ({
+        ...current,
+        [id]: {
+          ...(current[id] || {}),
+          status: "done",
+          answers: Array.isArray(data.answers) ? data.answers : [],
+          error: "",
+        },
+      }));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Could not generate answers.";
+      setAnswersByQuestion((current) => ({
+        ...current,
+        [id]: { ...(current[id] || { answers: [] }), status: "failed", error: message },
+      }));
+    }
+  }
+
+  function selectAnswer(context: QuestionContext, answer: AnswerOption) {
+    if (!session) return;
+    const id = questionId(context.question, context.round_name);
+    localStorage.setItem(selectedAnswerStorageKey(session.session_id, id), JSON.stringify(answer));
+    setAnswersByQuestion((current) => ({
+      ...current,
+      [id]: {
+        ...(current[id] || { status: "idle", answers: [] }),
+        selectedAnswer: answer,
+      },
+    }));
+  }
+
+  function renderQuestionBankSection(section: string, index: number) {
+    const parsed = parseQuestionBlocks(section);
+    return (
+      <div key={index} className="rounded-xl border border-[#2a2a2a] bg-[#0a0a0a] p-5">
+        {parsed.intro && <pre className="whitespace-pre-wrap text-sm leading-7 text-[#f5f0e8]/75">{parsed.intro}</pre>}
+        <div className="mt-5 space-y-5">
+          {parsed.questions.map((item) => {
+            const matched = questionContexts[normalizeQuestion(item.question)];
+            const context: QuestionContext = {
+              question: item.question,
+              round_name: matched?.round_name || item.round_name,
+              assigned_story_id: matched?.assigned_story_id || "",
+              assigned_story_title: matched?.assigned_story_title || "",
+            };
+            const id = questionId(context.question, context.round_name);
+            const state = answersByQuestion[id] || { status: "idle", answers: [] };
+            const loading = state.status === "loading";
+            return (
+              <article key={id} className="rounded-xl border border-[#2a2a2a] bg-[#141414] p-4">
+                <pre className="whitespace-pre-wrap text-sm leading-7 text-[#f5f0e8]/75">{item.block}</pre>
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <button
+                    disabled={loading}
+                    onClick={() => generateAnswersForQuestion(context)}
+                    className="rounded-xl bg-[#c9a96e] px-4 py-3 text-sm font-bold text-[#0a0a0a] transition hover:bg-[#f5f0e8] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {loading ? "Generating..." : state.answers.length ? "Regenerate Answers" : "Generate Answers"}
+                  </button>
+                  {state.selectedAnswer && (
+                    <span className="rounded-full border border-[#c9a96e]/40 bg-[#c9a96e]/10 px-3 py-2 text-xs font-semibold text-[#f2dfb8]">
+                      Gold check: {state.selectedAnswer.label} selected
+                    </span>
+                  )}
+                </div>
+                {state.error && <p className="mt-3 rounded-lg border border-red-400/20 bg-red-500/10 p-3 text-sm text-red-100">{state.error}</p>}
+                {state.answers.length > 0 && (
+                  <div className="mt-4 grid gap-3">
+                    {state.answers.map((answer) => {
+                      const selected = state.selectedAnswer?.label === answer.label;
+                      return (
+                        <details key={answer.label} className={`rounded-xl border p-4 ${selected ? "border-[#c9a96e] bg-[#c9a96e]/10" : "border-[#2a2a2a] bg-[#0a0a0a]"}`}>
+                          <summary className="cursor-pointer list-none text-sm font-semibold text-[#f5f0e8]">
+                            <span className="mr-2 text-[#c9a96e]">{selected ? "✓" : "+"}</span>
+                            {answer.label}
+                          </summary>
+                          <div className="mt-4 space-y-4 text-sm leading-7 text-[#f5f0e8]/72">
+                            <p className="whitespace-pre-wrap">{answer.full_answer}</p>
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <p><span className="font-semibold text-[#f5f0e8]">Why it wins:</span> {answer.why_it_wins}</p>
+                              <p><span className="font-semibold text-[#f5f0e8]">Metric:</span> {answer.metric_used}</p>
+                              <p><span className="font-semibold text-[#f5f0e8]">Tradeoff:</span> {answer.tradeoff_shown}</p>
+                              <p><span className="font-semibold text-[#f5f0e8]">Delivery:</span> {answer.delivery_notes}</p>
+                            </div>
+                            <button onClick={() => selectAnswer(context, answer)} className="rounded-xl border border-[#c9a96e]/50 px-4 py-3 text-sm font-semibold text-[#f2dfb8] hover:bg-[#c9a96e]/10">
+                              Use This Answer
+                            </button>
+                          </div>
+                        </details>
+                      );
+                    })}
+                  </div>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-[#0a0a0a] text-[#f5f0e8]">
@@ -487,6 +729,33 @@ export default function Home() {
                   </article>
                 );
               })}
+              <article className="rounded-[1.5rem] border border-[#2a2a2a] bg-[#141414] p-5">
+                <div className="flex items-start justify-between gap-3">
+                  <h2 className="text-xl font-semibold tracking-[-0.03em]">Module 7: Answer Generator</h2>
+                  <StatusBadge status={completed.prep_pack ? "ready" : "locked"} />
+                </div>
+                <p className="mt-3 min-h-[72px] text-sm leading-6 text-[#f5f0e8]/50">
+                  Generates three elite answer options under each question in the final prep pack. Uses the session CV, answer bank, and candidate profile.
+                </p>
+                <div className="mt-5">
+                  <div className="flex items-center justify-between text-xs text-[#f5f0e8]/42">
+                    <span>{completed.prep_pack ? "Open the Prep Pack and click Generate Answers under any question." : "Locked until Prep Pack is done"}</span>
+                    <span>{completed.prep_pack ? "100%" : "0%"}</span>
+                  </div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-[#1e1e1e]">
+                    <div className="h-full bg-[#c9a96e] transition-all" style={{ width: completed.prep_pack ? "100%" : "0%" }} />
+                  </div>
+                </div>
+                <div className="mt-5">
+                  <button
+                    disabled={!completed.prep_pack}
+                    onClick={() => setActiveModule("prep_pack")}
+                    className="rounded-xl bg-[#c9a96e] px-4 py-3 text-sm font-bold text-[#0a0a0a] transition hover:bg-[#f5f0e8] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Open Prep Pack
+                  </button>
+                </div>
+              </article>
             </div>
 
             {activeState && (
@@ -501,7 +770,11 @@ export default function Home() {
                 {activeState.markdown ? (
                   <div className="mt-6 grid gap-5">
                     {markdownSections.map((section, index) => (
-                      <pre key={index} className="whitespace-pre-wrap rounded-xl border border-[#2a2a2a] bg-[#0a0a0a] p-5 text-sm leading-7 text-[#f5f0e8]/75">{section}</pre>
+                      isQuestionBankSection(section) ? (
+                        renderQuestionBankSection(section, index)
+                      ) : (
+                        <pre key={index} className="whitespace-pre-wrap rounded-xl border border-[#2a2a2a] bg-[#0a0a0a] p-5 text-sm leading-7 text-[#f5f0e8]/75">{section}</pre>
+                      )
                     ))}
                   </div>
                 ) : (
