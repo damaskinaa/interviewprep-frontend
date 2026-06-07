@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 type SessionMeta = {
@@ -42,6 +42,48 @@ type QuestionAnswerState = {
   answers: AnswerOption[];
   selectedAnswer?: AnswerOption;
   error?: string;
+};
+
+type LuaFeedback = {
+  status: string;
+  score_out_of_10?: number;
+  verdict?: string;
+  what_worked?: string[];
+  what_was_weak?: string[];
+  better_structure?: string[];
+  top_1_percent_answers?: { safe_strong?: string; elite_concise?: string; pressure_proof?: string };
+  voice_and_delivery_coaching?: { pace?: string; tone?: string; confidence?: string; words_to_remove?: string[]; sentence_to_practise?: string };
+  adaptive_follow_up_question?: string;
+  move_on_allowed?: boolean;
+  raw_response?: string;
+};
+
+type PracticeState = {
+  questionId: string;
+  attempt: string;
+  submitting: boolean;
+  feedback?: LuaFeedback;
+  error?: string;
+  attemptCount: number;
+};
+
+type MockTurn = {
+  question: string;
+  round_name: string;
+  userAnswer: string;
+  feedback?: LuaFeedback;
+  score?: number;
+};
+
+type MockState = {
+  active: boolean;
+  questions: QuestionContext[];
+  currentIndex: number;
+  turns: MockTurn[];
+  inputText: string;
+  submitting: boolean;
+  error?: string;
+  done: boolean;
 };
 
 type QuestionContext = {
@@ -288,6 +330,9 @@ export default function Home() {
   const [modules, setModules] = useState<Record<ModuleName, ModuleState>>(emptyModules);
   const [activeModule, setActiveModule] = useState<ModuleName | "prep_pack" | "">("");
   const [answersByQuestion, setAnswersByQuestion] = useState<Record<string, QuestionAnswerState>>({});
+  const [practiceState, setPracticeState] = useState<PracticeState | null>(null);
+  const [mockState, setMockState] = useState<MockState | null>(null);
+  const practiceRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem("nailit_session");
@@ -524,6 +569,88 @@ export default function Home() {
     }));
   }
 
+  async function callLua(question: string, userAnswer: string): Promise<LuaFeedback> {
+    if (!session) throw new Error("No session");
+    const res = await fetch("/api/lua", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        company: session.company_name,
+        role: session.role_name,
+        question,
+        candidate_answer: userAnswer,
+        lua_brief: {},
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error || data?.message || "Lua feedback failed.");
+    return data as LuaFeedback;
+  }
+
+  function openPractice(context: QuestionContext) {
+    const id = questionId(context.question, context.round_name);
+    setPracticeState({ questionId: id, attempt: "", submitting: false, attemptCount: 0 });
+    setTimeout(() => practiceRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+  }
+
+  async function submitPractice(context: QuestionContext) {
+    if (!practiceState || !practiceState.attempt.trim()) return;
+    setPracticeState((s) => s ? { ...s, submitting: true, error: undefined } : s);
+    try {
+      const feedback = await callLua(context.question, practiceState.attempt);
+      setPracticeState((s) => s ? { ...s, submitting: false, feedback, attemptCount: s.attemptCount + 1 } : s);
+    } catch (err: unknown) {
+      setPracticeState((s) => s ? { ...s, submitting: false, error: err instanceof Error ? err.message : "Feedback failed." } : s);
+    }
+  }
+
+  function startMockInterview() {
+    const all = Object.values(questionContexts) as QuestionContext[];
+    if (!all.length) return;
+    setMockState({
+      active: true,
+      questions: all,
+      currentIndex: 0,
+      turns: [],
+      inputText: "",
+      submitting: false,
+      done: false,
+    });
+    setPracticeState(null);
+    setActiveModule("");
+  }
+
+  async function submitMockAnswer() {
+    if (!mockState || !mockState.inputText.trim()) return;
+    const q = mockState.questions[mockState.currentIndex];
+    setMockState((s) => s ? { ...s, submitting: true, error: undefined } : s);
+    try {
+      const feedback = await callLua(q.question, mockState.inputText);
+      const newTurn: MockTurn = {
+        question: q.question,
+        round_name: q.round_name,
+        userAnswer: mockState.inputText,
+        feedback,
+        score: typeof feedback.score_out_of_10 === "number" ? feedback.score_out_of_10 : undefined,
+      };
+      const newTurns = [...mockState.turns, newTurn];
+      const nextIndex = mockState.currentIndex + 1;
+      const done = nextIndex >= mockState.questions.length;
+      setMockState((s) => s ? { ...s, submitting: false, turns: newTurns, inputText: "", done } : s);
+    } catch (err: unknown) {
+      setMockState((s) => s ? { ...s, submitting: false, error: err instanceof Error ? err.message : "Feedback failed." } : s);
+    }
+  }
+
+  function mockNextQuestion() {
+    if (!mockState) return;
+    setMockState((s) => s ? { ...s, currentIndex: s.currentIndex + 1, inputText: "" } : s);
+  }
+
+  function mockRetry() {
+    setMockState((s) => s ? { ...s, inputText: "" } : s);
+  }
+
   function renderQuestionBankSection(section: string, index: number) {
     const parsed = parseQuestionBlocks(section);
     return (
@@ -542,7 +669,7 @@ export default function Home() {
             const state = answersByQuestion[id] || { status: "idle", answers: [] };
             const loading = state.status === "loading";
             return (
-              <article key={id} className="rounded-xl border border-[#2a2a2a] bg-[#141414] p-4">
+              <article key={id} className="rounded-xl border border-[#2a2a2a] bg-[#141414] p-4" ref={practiceState?.questionId === id ? practiceRef : null}>
                 <pre className="whitespace-pre-wrap text-sm leading-7 text-[#f5f0e8]/75">{item.block}</pre>
                 <div className="mt-4 flex flex-wrap items-center gap-3">
                   <button
@@ -577,13 +704,163 @@ export default function Home() {
                               <p><span className="font-semibold text-[#f5f0e8]">Tradeoff:</span> {answer.tradeoff_shown}</p>
                               <p><span className="font-semibold text-[#f5f0e8]">Delivery:</span> {answer.delivery_notes}</p>
                             </div>
-                            <button onClick={() => selectAnswer(context, answer)} className="rounded-xl border border-[#c9a96e]/50 px-4 py-3 text-sm font-semibold text-[#f2dfb8] hover:bg-[#c9a96e]/10">
-                              Use This Answer
-                            </button>
+                            <div className="flex gap-3 flex-wrap">
+                              <button onClick={() => selectAnswer(context, answer)} className="rounded-xl border border-[#c9a96e]/50 px-4 py-3 text-sm font-semibold text-[#f2dfb8] hover:bg-[#c9a96e]/10">
+                                Use This Answer
+                              </button>
+                              <button
+                                onClick={() => { selectAnswer(context, answer); openPractice(context); }}
+                                className="rounded-xl bg-[#1e1e1e] border border-[#c9a96e] px-4 py-3 text-sm font-semibold text-[#c9a96e] hover:bg-[#c9a96e]/10"
+                              >
+                                Practice with Lua →
+                              </button>
+                            </div>
                           </div>
                         </details>
                       );
                     })}
+                  </div>
+                )}
+
+                {/* Practice panel — shown when this question is open for practice */}
+                {practiceState?.questionId === id && (
+                  <div className="mt-5 rounded-xl border border-[#c9a96e]/30 bg-[#0d0d0d] p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.3em] text-[#c9a96e]">Lua Practice</p>
+                        <p className="mt-1 text-sm text-[#f5f0e8]/60">Type your version of the answer. Lua will score structure, content, and company alignment.</p>
+                      </div>
+                      <button onClick={() => setPracticeState(null)} className="text-xs text-[#f5f0e8]/40 hover:text-[#f5f0e8]/70">Close</button>
+                    </div>
+
+                    {/* Reference answer */}
+                    {state.selectedAnswer && (
+                      <details className="mb-4 rounded-xl border border-[#2a2a2a] bg-[#141414] p-3">
+                        <summary className="cursor-pointer text-xs font-semibold text-[#f5f0e8]/50">Reference answer: {state.selectedAnswer.label}</summary>
+                        <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-[#f5f0e8]/70">{state.selectedAnswer.full_answer}</p>
+                      </details>
+                    )}
+
+                    <textarea
+                      className="min-h-[160px] w-full rounded-xl border border-[#2a2a2a] bg-[#1e1e1e] p-4 text-sm leading-7 text-[#f5f0e8] outline-none focus:border-[#c9a96e]"
+                      placeholder="Type your answer here..."
+                      value={practiceState.attempt}
+                      onChange={(e) => setPracticeState((s) => s ? { ...s, attempt: e.target.value } : s)}
+                    />
+
+                    <div className="mt-3 flex gap-3 flex-wrap items-center">
+                      <button
+                        disabled={practiceState.submitting || !practiceState.attempt.trim()}
+                        onClick={() => submitPractice(context)}
+                        className="rounded-xl bg-[#c9a96e] px-5 py-3 text-sm font-bold text-[#0a0a0a] hover:bg-[#f5f0e8] disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {practiceState.submitting ? "Lua is reading..." : "Get Feedback"}
+                      </button>
+                      {practiceState.attemptCount > 0 && (
+                        <span className="text-xs text-[#f5f0e8]/40">Attempt {practiceState.attemptCount}</span>
+                      )}
+                    </div>
+
+                    {practiceState.error && (
+                      <p className="mt-3 rounded-lg border border-red-400/20 bg-red-500/10 p-3 text-sm text-red-100">{practiceState.error}</p>
+                    )}
+
+                    {/* Lua feedback */}
+                    {practiceState.feedback && practiceState.feedback.status === "coaching" && (
+                      <div className="mt-5 space-y-4">
+                        {/* Score */}
+                        <div className="flex items-center gap-4">
+                          <div className="flex-1">
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs font-semibold text-[#f5f0e8]/60">Score</span>
+                              <span className="text-lg font-bold text-[#c9a96e]">{practiceState.feedback.score_out_of_10 ?? "—"}<span className="text-sm text-[#f5f0e8]/40">/10</span></span>
+                            </div>
+                            <div className="h-2 overflow-hidden rounded-full bg-[#1e1e1e]">
+                              <div className="h-full bg-[#c9a96e] transition-all" style={{ width: `${((practiceState.feedback.score_out_of_10 ?? 0) / 10) * 100}%` }} />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Verdict */}
+                        {practiceState.feedback.verdict && (
+                          <p className="rounded-xl border border-[#2a2a2a] bg-[#141414] p-4 text-sm leading-6 text-[#f5f0e8]/80">{practiceState.feedback.verdict}</p>
+                        )}
+
+                        {/* What worked */}
+                        {practiceState.feedback.what_worked && practiceState.feedback.what_worked.length > 0 && (
+                          <div className="rounded-xl border-l-4 border-emerald-400/50 bg-emerald-500/5 p-4">
+                            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300">What worked</p>
+                            <ul className="space-y-1">
+                              {practiceState.feedback.what_worked.map((item, i) => (
+                                <li key={i} className="text-sm leading-6 text-[#f5f0e8]/75">• {item}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {/* What was weak */}
+                        {practiceState.feedback.what_was_weak && practiceState.feedback.what_was_weak.length > 0 && (
+                          <div className="rounded-xl border-l-4 border-amber-400/50 bg-amber-500/5 p-4">
+                            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-amber-300">What to sharpen</p>
+                            <ul className="space-y-1">
+                              {practiceState.feedback.what_was_weak.map((item, i) => (
+                                <li key={i} className="text-sm leading-6 text-[#f5f0e8]/75">• {item}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {/* Top 1% answers */}
+                        {practiceState.feedback.top_1_percent_answers && (
+                          <div className="rounded-xl border border-[#c9a96e]/25 bg-[#c9a96e]/5 p-4 space-y-4">
+                            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#c9a96e]">Lua's top 1% versions</p>
+                            {Object.entries(practiceState.feedback.top_1_percent_answers).map(([key, val]) => val && (
+                              <div key={key}>
+                                <p className="text-xs font-semibold text-[#f5f0e8]/50 mb-1 capitalize">{key.replace(/_/g, " ")}</p>
+                                <p className="text-sm leading-7 text-[#f5f0e8]/80 whitespace-pre-wrap">{val}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Voice coaching */}
+                        {practiceState.feedback.voice_and_delivery_coaching && (
+                          <div className="rounded-xl border border-[#2a2a2a] bg-[#141414] p-4 space-y-2">
+                            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#f5f0e8]/45">Delivery coaching</p>
+                            {practiceState.feedback.voice_and_delivery_coaching.pace && <p className="text-sm text-[#f5f0e8]/70"><span className="font-semibold text-[#f5f0e8]/90">Pace: </span>{practiceState.feedback.voice_and_delivery_coaching.pace}</p>}
+                            {practiceState.feedback.voice_and_delivery_coaching.tone && <p className="text-sm text-[#f5f0e8]/70"><span className="font-semibold text-[#f5f0e8]/90">Tone: </span>{practiceState.feedback.voice_and_delivery_coaching.tone}</p>}
+                            {practiceState.feedback.voice_and_delivery_coaching.confidence && <p className="text-sm text-[#f5f0e8]/70"><span className="font-semibold text-[#f5f0e8]/90">Confidence: </span>{practiceState.feedback.voice_and_delivery_coaching.confidence}</p>}
+                            {practiceState.feedback.voice_and_delivery_coaching.sentence_to_practise && (
+                              <p className="mt-2 rounded-lg border border-[#c9a96e]/20 bg-[#c9a96e]/5 p-3 text-sm italic text-[#f2dfb8]">"{practiceState.feedback.voice_and_delivery_coaching.sentence_to_practise}"</p>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Follow-up */}
+                        {practiceState.feedback.adaptive_follow_up_question && (
+                          <div className="rounded-xl border border-[#2a2a2a] bg-[#0a0a0a] p-4">
+                            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#f5f0e8]/45 mb-2">Lua follow-up</p>
+                            <p className="text-sm leading-6 text-[#f5f0e8]/80">{practiceState.feedback.adaptive_follow_up_question}</p>
+                          </div>
+                        )}
+
+                        {/* Actions */}
+                        <div className="flex gap-3 flex-wrap pt-2">
+                          <button
+                            onClick={() => setPracticeState((s) => s ? { ...s, attempt: "", feedback: undefined } : s)}
+                            className="rounded-xl border border-[#2a2a2a] px-4 py-3 text-sm text-[#f5f0e8]/70 hover:border-[#c9a96e]/50"
+                          >
+                            Try Again
+                          </button>
+                          <button
+                            onClick={() => setPracticeState(null)}
+                            className="rounded-xl bg-[#c9a96e] px-4 py-3 text-sm font-bold text-[#0a0a0a] hover:bg-[#f5f0e8]"
+                          >
+                            Next Question →
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </article>
@@ -610,6 +887,248 @@ export default function Home() {
             )}
           </div>
         </nav>
+
+        {/* ── MOCK INTERVIEW OVERLAY ─────────────────────────────────── */}
+        {mockState?.active && (
+          <div className="fixed inset-0 z-50 flex flex-col bg-[#0a0a0a] text-[#f5f0e8] overflow-y-auto">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-[#2a2a2a] px-6 py-4 flex-shrink-0">
+              <div className="flex items-center gap-4">
+                <img src="/nailit-logo-final.png?v=2" alt="Nailit" className="h-8 w-auto object-contain" />
+                <span className="text-xs uppercase tracking-[0.3em] text-[#c9a96e]">Mock Interview — Live</span>
+              </div>
+              <div className="flex items-center gap-6">
+                <span className="text-sm text-[#f5f0e8]/50">
+                  {mockState.done ? "Complete" : `Question ${mockState.currentIndex + 1} of ${mockState.questions.length}`}
+                </span>
+                <button
+                  onClick={() => setMockState(null)}
+                  className="rounded-xl border border-[#2a2a2a] px-3 py-1.5 text-xs text-[#f5f0e8]/50 hover:border-[#c9a96e]/40 hover:text-[#f5f0e8]"
+                >
+                  Exit
+                </button>
+              </div>
+            </div>
+
+            {/* Progress bar */}
+            {!mockState.done && (
+              <div className="h-1 w-full bg-[#1e1e1e] flex-shrink-0">
+                <div
+                  className="h-full bg-[#c9a96e] transition-all duration-500"
+                  style={{ width: `${(mockState.currentIndex / mockState.questions.length) * 100}%` }}
+                />
+              </div>
+            )}
+
+            <div className="flex-1 mx-auto w-full max-w-3xl px-6 py-10">
+
+              {/* ── DONE / SUMMARY SCREEN ── */}
+              {mockState.done ? (
+                <div className="space-y-8">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.35em] text-[#c9a96e]">Debrief</p>
+                    <h2 className="mt-3 text-4xl font-semibold tracking-[-0.05em]">Interview Complete</h2>
+                    <p className="mt-3 text-[#f5f0e8]/55 text-sm leading-6">
+                      {mockState.turns.length} question{mockState.turns.length !== 1 ? "s" : ""} answered.
+                      Average score:{" "}
+                      <span className="font-bold text-[#c9a96e]">
+                        {mockState.turns.filter(t => t.score != null).length > 0
+                          ? (mockState.turns.reduce((sum, t) => sum + (t.score ?? 0), 0) / mockState.turns.filter(t => t.score != null).length).toFixed(1)
+                          : "—"
+                        }/10
+                      </span>
+                    </p>
+                  </div>
+
+                  <div className="space-y-5">
+                    {mockState.turns.map((turn, i) => (
+                      <article key={i} className="rounded-2xl border border-[#2a2a2a] bg-[#141414] p-5 space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <p className="text-sm font-medium text-[#f5f0e8]/90 leading-6">Q{i + 1}. {turn.question}</p>
+                          {turn.score != null && (
+                            <span className="shrink-0 rounded-lg border border-[#c9a96e]/30 bg-[#c9a96e]/10 px-2 py-0.5 text-sm font-bold text-[#c9a96e]">
+                              {turn.score}/10
+                            </span>
+                          )}
+                        </div>
+                        {turn.feedback?.verdict && (
+                          <p className="text-xs leading-5 text-[#f5f0e8]/55 italic">{turn.feedback.verdict}</p>
+                        )}
+                        {turn.feedback?.what_worked && turn.feedback.what_worked.length > 0 && (
+                          <ul className="space-y-1">
+                            {turn.feedback.what_worked.slice(0, 2).map((w, j) => (
+                              <li key={j} className="flex items-start gap-2 text-xs text-green-300/80">
+                                <span className="mt-0.5 shrink-0 text-green-400">✓</span>{w}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {turn.feedback?.what_was_weak && turn.feedback.what_was_weak.length > 0 && (
+                          <ul className="space-y-1">
+                            {turn.feedback.what_was_weak.slice(0, 2).map((w, j) => (
+                              <li key={j} className="flex items-start gap-2 text-xs text-amber-300/80">
+                                <span className="mt-0.5 shrink-0 text-amber-400">△</span>{w}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </article>
+                    ))}
+                  </div>
+
+                  <button
+                    onClick={() => setMockState(null)}
+                    className="rounded-xl bg-[#c9a96e] px-6 py-3 text-sm font-bold text-[#0a0a0a] hover:bg-[#f5f0e8] transition"
+                  >
+                    Back to Prep Pack
+                  </button>
+                </div>
+
+              ) : (
+                /* ── ACTIVE QUESTION SCREEN ── */
+                (() => {
+                  const currentQ = mockState.questions[mockState.currentIndex];
+                  const currentTurn = mockState.turns[mockState.currentIndex];
+                  const hasFeedback = !!currentTurn?.feedback;
+
+                  return (
+                    <div className="space-y-6">
+                      {/* Round label */}
+                      {currentQ.round_name && (
+                        <p className="text-xs uppercase tracking-[0.3em] text-[#f5f0e8]/35">{currentQ.round_name}</p>
+                      )}
+
+                      {/* Question */}
+                      <div className="rounded-2xl border border-[#2a2a2a] bg-[#141414] p-6">
+                        <p className="text-xs uppercase tracking-[0.25em] text-[#c9a96e] mb-3">Question {mockState.currentIndex + 1}</p>
+                        <p className="text-lg font-medium leading-7 text-[#f5f0e8]">{currentQ.question}</p>
+                      </div>
+
+                      {/* Input area — hidden once feedback received */}
+                      {!hasFeedback && (
+                        <div className="space-y-3">
+                          <textarea
+                            rows={6}
+                            placeholder="Answer as you would in a real interview. No hints. No prep pack."
+                            value={mockState.inputText}
+                            onChange={(e) => setMockState(prev => prev ? { ...prev, inputText: e.target.value } : prev)}
+                            className="w-full resize-none rounded-2xl border border-[#2a2a2a] bg-[#1e1e1e] px-5 py-4 text-sm leading-6 text-[#f5f0e8] placeholder-[#f5f0e8]/25 focus:border-[#c9a96e]/50 focus:outline-none"
+                          />
+                          <div className="flex items-center gap-3">
+                            <button
+                              onClick={submitMockAnswer}
+                              disabled={mockState.submitting || !mockState.inputText.trim()}
+                              className="rounded-xl bg-[#c9a96e] px-5 py-3 text-sm font-bold text-[#0a0a0a] transition hover:bg-[#f5f0e8] disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              {mockState.submitting ? "Lua is scoring..." : "Submit Answer"}
+                            </button>
+                            {mockState.error && (
+                              <p className="text-xs text-red-400">{mockState.error}</p>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Feedback */}
+                      {hasFeedback && currentTurn.feedback && (
+                        <div className="space-y-4">
+                          {/* Score */}
+                          <div className="flex items-center gap-4 rounded-2xl border border-[#2a2a2a] bg-[#141414] p-5">
+                            <span className="text-3xl font-bold text-[#c9a96e]">
+                              {currentTurn.feedback.score_out_of_10 ?? "—"}<span className="text-base text-[#f5f0e8]/40">/10</span>
+                            </span>
+                            <div className="flex-1">
+                              <div className="h-2 overflow-hidden rounded-full bg-[#1e1e1e]">
+                                <div
+                                  className="h-full bg-[#c9a96e] transition-all duration-700"
+                                  style={{ width: `${((currentTurn.feedback.score_out_of_10 ?? 0) / 10) * 100}%` }}
+                                />
+                              </div>
+                              {currentTurn.feedback.verdict && (
+                                <p className="mt-2 text-sm text-[#f5f0e8]/70 italic">{currentTurn.feedback.verdict}</p>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Your answer shown */}
+                          <details className="rounded-xl border border-[#2a2a2a] bg-[#0a0a0a] p-4">
+                            <summary className="cursor-pointer text-xs uppercase tracking-[0.25em] text-[#f5f0e8]/40 select-none">Your answer</summary>
+                            <p className="mt-3 text-sm leading-6 text-[#f5f0e8]/65">{currentTurn.userAnswer}</p>
+                          </details>
+
+                          {/* What worked */}
+                          {currentTurn.feedback.what_worked && currentTurn.feedback.what_worked.length > 0 && (
+                            <div className="rounded-xl border border-green-500/15 bg-green-500/5 p-4 space-y-2">
+                              <p className="text-xs uppercase tracking-[0.25em] text-green-400">What Worked</p>
+                              <ul className="space-y-1.5">
+                                {currentTurn.feedback.what_worked.map((item, i) => (
+                                  <li key={i} className="flex items-start gap-2 text-sm text-green-200/80">
+                                    <span className="mt-0.5 shrink-0 text-green-400">✓</span>{item}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* What was weak */}
+                          {currentTurn.feedback.what_was_weak && currentTurn.feedback.what_was_weak.length > 0 && (
+                            <div className="rounded-xl border border-amber-500/15 bg-amber-500/5 p-4 space-y-2">
+                              <p className="text-xs uppercase tracking-[0.25em] text-amber-400">Sharpen This</p>
+                              <ul className="space-y-1.5">
+                                {currentTurn.feedback.what_was_weak.map((item, i) => (
+                                  <li key={i} className="flex items-start gap-2 text-sm text-amber-200/80">
+                                    <span className="mt-0.5 shrink-0 text-amber-400">△</span>{item}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* Delivery coaching */}
+                          {currentTurn.feedback.voice_and_delivery_coaching && (
+                            <div className="rounded-xl border border-[#2a2a2a] bg-[#141414] p-4 space-y-2">
+                              <p className="text-xs uppercase tracking-[0.25em] text-[#c9a96e]">Delivery Coaching</p>
+                              {currentTurn.feedback.voice_and_delivery_coaching.pace && (
+                                <p className="text-sm text-[#f5f0e8]/70"><span className="font-semibold text-[#f5f0e8]/90">Pace: </span>{currentTurn.feedback.voice_and_delivery_coaching.pace}</p>
+                              )}
+                              {currentTurn.feedback.voice_and_delivery_coaching.tone && (
+                                <p className="text-sm text-[#f5f0e8]/70"><span className="font-semibold text-[#f5f0e8]/90">Tone: </span>{currentTurn.feedback.voice_and_delivery_coaching.tone}</p>
+                              )}
+                              {currentTurn.feedback.voice_and_delivery_coaching.confidence && (
+                                <p className="text-sm text-[#f5f0e8]/70"><span className="font-semibold text-[#f5f0e8]/90">Confidence: </span>{currentTurn.feedback.voice_and_delivery_coaching.confidence}</p>
+                              )}
+                              {currentTurn.feedback.voice_and_delivery_coaching.sentence_to_practise && (
+                                <p className="mt-2 rounded-lg border border-[#c9a96e]/20 bg-[#c9a96e]/5 p-3 text-sm italic text-[#f2dfb8]">"{currentTurn.feedback.voice_and_delivery_coaching.sentence_to_practise}"</p>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Follow-up question from Lua */}
+                          {currentTurn.feedback.adaptive_follow_up_question && (
+                            <div className="rounded-xl border border-[#c9a96e]/20 bg-[#c9a96e]/5 p-4">
+                              <p className="text-xs uppercase tracking-[0.25em] text-[#c9a96e] mb-2">Lua Follow-up</p>
+                              <p className="text-sm leading-6 text-[#f5f0e8]/80">{currentTurn.feedback.adaptive_follow_up_question}</p>
+                            </div>
+                          )}
+
+                          {/* Actions */}
+                          <div className="flex items-center gap-3 pt-2">
+                            <button
+                              onClick={mockNextQuestion}
+                              className="rounded-xl bg-[#c9a96e] px-5 py-3 text-sm font-bold text-[#0a0a0a] transition hover:bg-[#f5f0e8]"
+                            >
+                              {mockState.currentIndex + 1 >= mockState.questions.length ? "See Results →" : "Next Question →"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()
+              )}
+            </div>
+          </div>
+        )}
 
         {screen === "setup" && (
           <section className="py-10">
@@ -753,6 +1272,34 @@ export default function Home() {
                     className="rounded-xl bg-[#c9a96e] px-4 py-3 text-sm font-bold text-[#0a0a0a] transition hover:bg-[#f5f0e8] disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Open Prep Pack
+                  </button>
+                </div>
+              </article>
+
+              {/* Module 8: Mock Interview */}
+              <article className="rounded-[1.5rem] border border-[#c9a96e]/20 bg-[#141414] p-5">
+                <div className="flex items-start justify-between gap-3">
+                  <h2 className="text-xl font-semibold tracking-[-0.03em]">Module 8: Mock Interview</h2>
+                  <StatusBadge status={completed.prep_pack && Object.values(questionContexts).length > 0 ? "ready" : "locked"} />
+                </div>
+                <p className="mt-3 min-h-[72px] text-sm leading-6 text-[#f5f0e8]/50">
+                  Live mock interview with Lua. Questions appear one at a time. No hints. Immediate feedback per answer. Score tracked. Final debrief at the end.
+                </p>
+                <div className="mt-5">
+                  <div className="flex items-center justify-between text-xs text-[#f5f0e8]/42">
+                    <span>{completed.prep_pack ? `${Object.values(questionContexts).length} questions ready` : "Run all modules first"}</span>
+                  </div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-[#1e1e1e]">
+                    <div className="h-full bg-[#c9a96e] transition-all" style={{ width: completed.prep_pack ? "100%" : "0%" }} />
+                  </div>
+                </div>
+                <div className="mt-5">
+                  <button
+                    disabled={!completed.prep_pack || Object.values(questionContexts).length === 0}
+                    onClick={startMockInterview}
+                    className="rounded-xl bg-[#c9a96e] px-4 py-3 text-sm font-bold text-[#0a0a0a] transition hover:bg-[#f5f0e8] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Start Mock Interview
                   </button>
                 </div>
               </article>
