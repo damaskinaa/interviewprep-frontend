@@ -70,6 +70,7 @@ type PracticeState = {
 type MockTurn = {
   question: string;
   round_name: string;
+  pickedAnswer?: AnswerOption;
   userAnswer: string;
   feedback?: LuaFeedback;
   score?: number;
@@ -80,6 +81,11 @@ type MockState = {
   questions: QuestionContext[];
   currentIndex: number;
   turns: MockTurn[];
+  // phase: "pick" = show 3 ideal answers to choose from; "practice" = practice delivering chosen answer
+  phase: "pick" | "practice";
+  pickedAnswer?: AnswerOption;
+  loadingAnswers: boolean;
+  availableAnswers: AnswerOption[];
   inputText: string;
   submitting: boolean;
   error?: string;
@@ -607,17 +613,76 @@ export default function Home() {
   function startMockInterview() {
     const all = Object.values(questionContexts) as QuestionContext[];
     if (!all.length) return;
+    const firstQ = all[0];
+    // Pre-load answers for first question if already generated
+    const firstState = answersByQuestion[normalizeQuestion(firstQ.question)];
+    const preloaded = firstState?.answers ?? [];
     setMockState({
       active: true,
       questions: all,
       currentIndex: 0,
       turns: [],
+      phase: "pick",
+      pickedAnswer: undefined,
+      loadingAnswers: preloaded.length === 0,
+      availableAnswers: preloaded,
       inputText: "",
       submitting: false,
       done: false,
     });
     setPracticeState(null);
     setActiveModule("");
+    // If no answers preloaded, fetch them now
+    if (preloaded.length === 0) {
+      generateAnswersForQuestion(firstQ).then(() => {
+        setMockState((s) => {
+          if (!s) return s;
+          const st = answersByQuestion[normalizeQuestion(firstQ.question)];
+          return { ...s, loadingAnswers: false, availableAnswers: st?.answers ?? [] };
+        });
+      }).catch(() => {
+        setMockState((s) => s ? { ...s, loadingAnswers: false } : s);
+      });
+    }
+  }
+
+  function mockPickAnswer(answer: AnswerOption) {
+    setMockState((s) => s ? { ...s, phase: "practice", pickedAnswer: answer, inputText: "" } : s);
+  }
+
+  async function mockAdvanceToQuestion(index: number) {
+    if (!mockState) return;
+    const q = mockState.questions[index];
+    if (!q) {
+      // All questions done
+      setMockState((s) => s ? { ...s, done: true } : s);
+      return;
+    }
+    const existing = answersByQuestion[normalizeQuestion(q.question)];
+    const preloaded = existing?.answers ?? [];
+    setMockState((s) => s ? {
+      ...s,
+      currentIndex: index,
+      phase: "pick",
+      pickedAnswer: undefined,
+      loadingAnswers: preloaded.length === 0,
+      availableAnswers: preloaded,
+      inputText: "",
+      submitting: false,
+      error: undefined,
+    } : s);
+    if (preloaded.length === 0) {
+      try {
+        await generateAnswersForQuestion(q);
+        setMockState((s) => {
+          if (!s) return s;
+          const st = answersByQuestion[normalizeQuestion(q.question)];
+          return { ...s, loadingAnswers: false, availableAnswers: st?.answers ?? [] };
+        });
+      } catch {
+        setMockState((s) => s ? { ...s, loadingAnswers: false } : s);
+      }
+    }
   }
 
   async function submitMockAnswer() {
@@ -629,14 +694,13 @@ export default function Home() {
       const newTurn: MockTurn = {
         question: q.question,
         round_name: q.round_name,
+        pickedAnswer: mockState.pickedAnswer,
         userAnswer: mockState.inputText,
         feedback,
         score: typeof feedback.score_out_of_10 === "number" ? feedback.score_out_of_10 : undefined,
       };
       const newTurns = [...mockState.turns, newTurn];
-      const nextIndex = mockState.currentIndex + 1;
-      const done = nextIndex >= mockState.questions.length;
-      setMockState((s) => s ? { ...s, submitting: false, turns: newTurns, inputText: "", done } : s);
+      setMockState((s) => s ? { ...s, submitting: false, turns: newTurns } : s);
     } catch (err: unknown) {
       setMockState((s) => s ? { ...s, submitting: false, error: err instanceof Error ? err.message : "Feedback failed." } : s);
     }
@@ -644,7 +708,8 @@ export default function Home() {
 
   function mockNextQuestion() {
     if (!mockState) return;
-    setMockState((s) => s ? { ...s, currentIndex: s.currentIndex + 1, inputText: "" } : s);
+    const next = mockState.currentIndex + 1;
+    mockAdvanceToQuestion(next);
   }
 
   function mockRetry() {
@@ -1004,34 +1069,115 @@ export default function Home() {
                         <p className="text-lg font-medium leading-7 text-[#f5f0e8]">{currentQ.question}</p>
                       </div>
 
-                      {/* Input area — hidden once feedback received */}
-                      {!hasFeedback && (
-                        <div className="space-y-3">
-                          <textarea
-                            rows={6}
-                            placeholder="Answer as you would in a real interview. No hints. No prep pack."
-                            value={mockState.inputText}
-                            onChange={(e) => setMockState(prev => prev ? { ...prev, inputText: e.target.value } : prev)}
-                            className="w-full resize-none rounded-2xl border border-[#2a2a2a] bg-[#1e1e1e] px-5 py-4 text-sm leading-6 text-[#f5f0e8] placeholder-[#f5f0e8]/25 focus:border-[#c9a96e]/50 focus:outline-none"
-                          />
-                          <div className="flex items-center gap-3">
-                            <button
-                              onClick={submitMockAnswer}
-                              disabled={mockState.submitting || !mockState.inputText.trim()}
-                              className="rounded-xl bg-[#c9a96e] px-5 py-3 text-sm font-bold text-[#0a0a0a] transition hover:bg-[#f5f0e8] disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              {mockState.submitting ? "Lua is scoring..." : "Submit Answer"}
-                            </button>
-                            {mockState.error && (
-                              <p className="text-xs text-red-400">{mockState.error}</p>
-                            )}
+                      {/* ── PHASE: PICK AN ANSWER ── */}
+                      {mockState.phase === "pick" && !hasFeedback && (
+                        <div className="space-y-4">
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.25em] text-[#c9a96e]">Step 1 — Choose your answer</p>
+                            <p className="mt-1 text-sm text-[#f5f0e8]/50">Lua prepared three top-1% answers. Pick one to practise. Read them, decide which fits you best, then commit.</p>
+                          </div>
+
+                          {mockState.loadingAnswers ? (
+                            <div className="rounded-2xl border border-[#2a2a2a] bg-[#141414] p-6 text-center">
+                              <p className="text-sm text-[#f5f0e8]/50">Lua is preparing your answers...</p>
+                            </div>
+                          ) : mockState.availableAnswers.length === 0 ? (
+                            <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5 space-y-3">
+                              <p className="text-sm text-amber-200/80">No answers generated yet for this question.</p>
+                              <button
+                                onClick={() => {
+                                  setMockState(s => s ? { ...s, loadingAnswers: true } : s);
+                                  generateAnswersForQuestion(currentQ).then(() => {
+                                    setMockState(s => {
+                                      if (!s) return s;
+                                      const st = answersByQuestion[normalizeQuestion(currentQ.question)];
+                                      return { ...s, loadingAnswers: false, availableAnswers: st?.answers ?? [] };
+                                    });
+                                  }).catch(() => setMockState(s => s ? { ...s, loadingAnswers: false } : s));
+                                }}
+                                className="rounded-xl bg-[#c9a96e] px-4 py-2 text-sm font-bold text-[#0a0a0a] hover:bg-[#f5f0e8] transition"
+                              >
+                                Generate Answers
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="space-y-3">
+                              {mockState.availableAnswers.map((answer, i) => (
+                                <button
+                                  key={i}
+                                  onClick={() => mockPickAnswer(answer)}
+                                  className="w-full text-left rounded-2xl border border-[#2a2a2a] bg-[#141414] p-5 hover:border-[#c9a96e]/50 hover:bg-[#1e1e1e] transition group"
+                                >
+                                  <div className="flex items-start justify-between gap-3 mb-3">
+                                    <span className="rounded-lg bg-[#c9a96e]/15 px-2.5 py-1 text-xs font-bold text-[#c9a96e]">{answer.label}</span>
+                                    <span className="text-xs text-[#f5f0e8]/30 group-hover:text-[#c9a96e] transition">Pick this →</span>
+                                  </div>
+                                  <p className="text-sm leading-6 text-[#f5f0e8]/80 line-clamp-4">{answer.full_answer}</p>
+                                  {answer.why_it_wins && (
+                                    <p className="mt-2 text-xs text-[#f5f0e8]/40 italic">{answer.why_it_wins}</p>
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* ── PHASE: PRACTICE THE PICKED ANSWER ── */}
+                      {mockState.phase === "practice" && !hasFeedback && mockState.pickedAnswer && (
+                        <div className="space-y-4">
+                          {/* Show picked answer as reference */}
+                          <details className="rounded-xl border border-[#c9a96e]/20 bg-[#c9a96e]/5 p-4" open>
+                            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.25em] text-[#c9a96e] select-none">
+                              Your chosen answer — {mockState.pickedAnswer.label}
+                            </summary>
+                            <p className="mt-3 text-sm leading-7 text-[#f5f0e8]/80 whitespace-pre-wrap">{mockState.pickedAnswer.full_answer}</p>
+                          </details>
+
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.25em] text-[#c9a96e]">Step 2 — Deliver it</p>
+                            <p className="mt-1 text-sm text-[#f5f0e8]/50">Now say it in your own words. Do not copy it — adapt it. Lua coaches your version.</p>
+                          </div>
+
+                          <div className="space-y-3">
+                            <textarea
+                              rows={6}
+                              placeholder="Deliver the answer in your own words. Adapt the story, own the language."
+                              value={mockState.inputText}
+                              onChange={(e) => setMockState(prev => prev ? { ...prev, inputText: e.target.value } : prev)}
+                              className="w-full resize-none rounded-2xl border border-[#2a2a2a] bg-[#1e1e1e] px-5 py-4 text-sm leading-6 text-[#f5f0e8] placeholder-[#f5f0e8]/25 focus:border-[#c9a96e]/50 focus:outline-none"
+                            />
+                            <div className="flex items-center gap-3">
+                              <button
+                                onClick={submitMockAnswer}
+                                disabled={mockState.submitting || !mockState.inputText.trim()}
+                                className="rounded-xl bg-[#c9a96e] px-5 py-3 text-sm font-bold text-[#0a0a0a] transition hover:bg-[#f5f0e8] disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                {mockState.submitting ? "Lua is reading..." : "Get Feedback"}
+                              </button>
+                              <button
+                                onClick={() => setMockState(s => s ? { ...s, phase: "pick", pickedAnswer: undefined, inputText: "" } : s)}
+                                className="rounded-xl border border-[#2a2a2a] px-4 py-3 text-sm text-[#f5f0e8]/50 hover:border-[#c9a96e]/30 transition"
+                              >
+                                ← Choose different answer
+                              </button>
+                              {mockState.error && <p className="text-xs text-red-400">{mockState.error}</p>}
+                            </div>
                           </div>
                         </div>
                       )}
 
-                      {/* Feedback */}
+                      {/* ── FEEDBACK ── */}
                       {hasFeedback && currentTurn.feedback && (
                         <div className="space-y-4">
+                          {/* Picked answer reminder */}
+                          {currentTurn.pickedAnswer && (
+                            <details className="rounded-xl border border-[#2a2a2a] bg-[#0a0a0a] p-4">
+                              <summary className="cursor-pointer text-xs uppercase tracking-[0.25em] text-[#f5f0e8]/40 select-none">Target answer: {currentTurn.pickedAnswer.label}</summary>
+                              <p className="mt-3 text-sm leading-6 text-[#f5f0e8]/60 whitespace-pre-wrap">{currentTurn.pickedAnswer.full_answer}</p>
+                            </details>
+                          )}
+
                           {/* Score */}
                           <div className="flex items-center gap-4 rounded-2xl border border-[#2a2a2a] bg-[#141414] p-5">
                             <span className="text-3xl font-bold text-[#c9a96e]">
@@ -1039,10 +1185,7 @@ export default function Home() {
                             </span>
                             <div className="flex-1">
                               <div className="h-2 overflow-hidden rounded-full bg-[#1e1e1e]">
-                                <div
-                                  className="h-full bg-[#c9a96e] transition-all duration-700"
-                                  style={{ width: `${((currentTurn.feedback.score_out_of_10 ?? 0) / 10) * 100}%` }}
-                                />
+                                <div className="h-full bg-[#c9a96e] transition-all duration-700" style={{ width: `${((currentTurn.feedback.score_out_of_10 ?? 0) / 10) * 100}%` }} />
                               </div>
                               {currentTurn.feedback.verdict && (
                                 <p className="mt-2 text-sm text-[#f5f0e8]/70 italic">{currentTurn.feedback.verdict}</p>
@@ -1050,60 +1193,46 @@ export default function Home() {
                             </div>
                           </div>
 
-                          {/* Your answer shown */}
+                          {/* Your delivery shown */}
                           <details className="rounded-xl border border-[#2a2a2a] bg-[#0a0a0a] p-4">
-                            <summary className="cursor-pointer text-xs uppercase tracking-[0.25em] text-[#f5f0e8]/40 select-none">Your answer</summary>
+                            <summary className="cursor-pointer text-xs uppercase tracking-[0.25em] text-[#f5f0e8]/40 select-none">Your delivery</summary>
                             <p className="mt-3 text-sm leading-6 text-[#f5f0e8]/65">{currentTurn.userAnswer}</p>
                           </details>
 
-                          {/* What worked */}
                           {currentTurn.feedback.what_worked && currentTurn.feedback.what_worked.length > 0 && (
                             <div className="rounded-xl border border-green-500/15 bg-green-500/5 p-4 space-y-2">
                               <p className="text-xs uppercase tracking-[0.25em] text-green-400">What Worked</p>
                               <ul className="space-y-1.5">
                                 {currentTurn.feedback.what_worked.map((item, i) => (
-                                  <li key={i} className="flex items-start gap-2 text-sm text-green-200/80">
-                                    <span className="mt-0.5 shrink-0 text-green-400">✓</span>{item}
-                                  </li>
+                                  <li key={i} className="flex items-start gap-2 text-sm text-green-200/80"><span className="mt-0.5 shrink-0 text-green-400">✓</span>{item}</li>
                                 ))}
                               </ul>
                             </div>
                           )}
 
-                          {/* What was weak */}
                           {currentTurn.feedback.what_was_weak && currentTurn.feedback.what_was_weak.length > 0 && (
                             <div className="rounded-xl border border-amber-500/15 bg-amber-500/5 p-4 space-y-2">
                               <p className="text-xs uppercase tracking-[0.25em] text-amber-400">Sharpen This</p>
                               <ul className="space-y-1.5">
                                 {currentTurn.feedback.what_was_weak.map((item, i) => (
-                                  <li key={i} className="flex items-start gap-2 text-sm text-amber-200/80">
-                                    <span className="mt-0.5 shrink-0 text-amber-400">△</span>{item}
-                                  </li>
+                                  <li key={i} className="flex items-start gap-2 text-sm text-amber-200/80"><span className="mt-0.5 shrink-0 text-amber-400">△</span>{item}</li>
                                 ))}
                               </ul>
                             </div>
                           )}
 
-                          {/* Delivery coaching */}
                           {currentTurn.feedback.voice_and_delivery_coaching && (
                             <div className="rounded-xl border border-[#2a2a2a] bg-[#141414] p-4 space-y-2">
                               <p className="text-xs uppercase tracking-[0.25em] text-[#c9a96e]">Delivery Coaching</p>
-                              {currentTurn.feedback.voice_and_delivery_coaching.pace && (
-                                <p className="text-sm text-[#f5f0e8]/70"><span className="font-semibold text-[#f5f0e8]/90">Pace: </span>{currentTurn.feedback.voice_and_delivery_coaching.pace}</p>
-                              )}
-                              {currentTurn.feedback.voice_and_delivery_coaching.tone && (
-                                <p className="text-sm text-[#f5f0e8]/70"><span className="font-semibold text-[#f5f0e8]/90">Tone: </span>{currentTurn.feedback.voice_and_delivery_coaching.tone}</p>
-                              )}
-                              {currentTurn.feedback.voice_and_delivery_coaching.confidence && (
-                                <p className="text-sm text-[#f5f0e8]/70"><span className="font-semibold text-[#f5f0e8]/90">Confidence: </span>{currentTurn.feedback.voice_and_delivery_coaching.confidence}</p>
-                              )}
+                              {currentTurn.feedback.voice_and_delivery_coaching.pace && <p className="text-sm text-[#f5f0e8]/70"><span className="font-semibold text-[#f5f0e8]/90">Pace: </span>{currentTurn.feedback.voice_and_delivery_coaching.pace}</p>}
+                              {currentTurn.feedback.voice_and_delivery_coaching.tone && <p className="text-sm text-[#f5f0e8]/70"><span className="font-semibold text-[#f5f0e8]/90">Tone: </span>{currentTurn.feedback.voice_and_delivery_coaching.tone}</p>}
+                              {currentTurn.feedback.voice_and_delivery_coaching.confidence && <p className="text-sm text-[#f5f0e8]/70"><span className="font-semibold text-[#f5f0e8]/90">Confidence: </span>{currentTurn.feedback.voice_and_delivery_coaching.confidence}</p>}
                               {currentTurn.feedback.voice_and_delivery_coaching.sentence_to_practise && (
                                 <p className="mt-2 rounded-lg border border-[#c9a96e]/20 bg-[#c9a96e]/5 p-3 text-sm italic text-[#f2dfb8]">"{currentTurn.feedback.voice_and_delivery_coaching.sentence_to_practise}"</p>
                               )}
                             </div>
                           )}
 
-                          {/* Follow-up question from Lua */}
                           {currentTurn.feedback.adaptive_follow_up_question && (
                             <div className="rounded-xl border border-[#c9a96e]/20 bg-[#c9a96e]/5 p-4">
                               <p className="text-xs uppercase tracking-[0.25em] text-[#c9a96e] mb-2">Lua Follow-up</p>
@@ -1111,8 +1240,23 @@ export default function Home() {
                             </div>
                           )}
 
-                          {/* Actions */}
-                          <div className="flex items-center gap-3 pt-2">
+                          {/* Actions: retry same answer OR next question */}
+                          <div className="flex items-center gap-3 pt-2 flex-wrap">
+                            <button
+                              onClick={() => {
+                                // retry: go back to practice phase with same picked answer
+                                setMockState(s => s ? {
+                                  ...s,
+                                  phase: "practice",
+                                  turns: s.turns.slice(0, s.currentIndex),
+                                  inputText: "",
+                                  error: undefined,
+                                } : s);
+                              }}
+                              className="rounded-xl border border-[#2a2a2a] px-5 py-3 text-sm text-[#f5f0e8]/65 hover:border-[#c9a96e]/40 transition"
+                            >
+                              Try Again
+                            </button>
                             <button
                               onClick={mockNextQuestion}
                               className="rounded-xl bg-[#c9a96e] px-5 py-3 text-sm font-bold text-[#0a0a0a] transition hover:bg-[#f5f0e8]"
