@@ -523,6 +523,9 @@ export default function Home() {
   async function generateAnswersForQuestion(context: QuestionContext) {
     if (!session) return;
     const id = questionId(context.question, context.round_name);
+    // Guard: don't fire if already loading or done
+    const existing = answersByQuestion[id];
+    if (existing?.status === "loading" || existing?.status === "done") return;
     setError("");
     setAnswersByQuestion((current) => ({
       ...current,

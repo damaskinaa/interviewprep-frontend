@@ -41,8 +41,8 @@ type ExtractedSource = CandidateSource & {
   content: string;
 };
 
-const TAVILY_SEARCH_TIMEOUT_MS = 28000;
-const TAVILY_EXTRACT_TIMEOUT_MS = 22000;
+const TAVILY_SEARCH_TIMEOUT_MS = 20000;
+const TAVILY_EXTRACT_TIMEOUT_MS = 18000;
 const TAVILY_FALLBACK_RESEARCH = `[NAILIT_EXTERNAL_RESEARCH]
 Research skipped: timeout
 
@@ -239,59 +239,26 @@ function isRelevantSource(row: SearchResult, company: string, role: string, sour
   return Boolean(hasCompanySignal && (hasRoleSignal || hasInterviewProcessSignal));
 }
 
+// Vercel role: fast company-level discovery only (must stay under 60s).
+// Per-round deep research (20-25 searches per round) runs inside Daytona where there is no timeout.
 function researchQueries(company: string, role: string) {
   const c = company.trim();
   const r = role.trim();
 
   return [
-    // ── OFFICIAL SOURCES ──────────────────────────────────────────
+    // Official company signals
     `${c} official interview process how we hire`,
     `${c} careers interview tips what to expect`,
     `${c} values leadership principles culture`,
-    `${c} ${r} job description requirements 2025`,
-    `${c} how we hire engineering program management`,
-
-    // ── GLASSDOOR — real reported questions ───────────────────────
-    `site:glassdoor.com "${c}" "${r}" interview questions`,
-    `site:glassdoor.com "${c}" interview experience 2024 2025`,
-    `site:glassdoor.com "${c}" behavioral interview questions`,
-    `site:glassdoor.com "${c}" hiring manager interview`,
-    `site:glassdoor.com "${c}" recruiter screen questions`,
-
-    // ── BLIND — candid insider reports ───────────────────────────
-    `site:teamblind.com "${c}" interview process`,
-    `site:teamblind.com "${c}" "${r}" interview`,
-    `site:blind.app "${c}" interview questions rounds`,
-
-    // ── REDDIT — community experience threads ─────────────────────
-    `site:reddit.com "${c}" "${r}" interview questions asked`,
-    `site:reddit.com "${c}" interview experience offer 2024 2025`,
-    `site:reddit.com "${c}" behavioral interview what they ask`,
-    `site:reddit.com "${c}" googliness culture interview questions`,
-
-    // ── LINKEDIN ─────────────────────────────────────────────────
-    `site:linkedin.com/interview-questions "${c}" "${r}"`,
-    `${c} ${r} interview questions linkedin 2024 2025`,
-
-    // ── INDEED ───────────────────────────────────────────────────
-    `site:indeed.com "${c}" "${r}" interview questions`,
-    `${c} interview questions indeed candidate experience`,
-
-    // ── ROUND-SPECIFIC QUESTION TARGETING ────────────────────────
-    `"${c}" behavioral interview questions STAR method`,
-    `"${c}" googliness OR "culture fit" interview questions`,
-    `"${c}" hiring manager interview questions program manager`,
-    `"${c}" cross functional stakeholder interview questions`,
-    `"${c}" technical execution interview questions "${r}"`,
-
-    // ── PREP COMMUNITIES ─────────────────────────────────────────
-    `${c} ${r} interview questions igotanoffer OR exponent OR tryexponent`,
-    `${c} ${r} interview preparation guide 2024 2025`,
-    `${c} ${r} interview tips medium substack`,
-
-    // ── YOUTUBE ──────────────────────────────────────────────────
-    `site:youtube.com "${c}" "${r}" interview preparation`,
-    `site:youtube.com "${c}" interview questions mock`,
+    // High-value community sources — company-level process overview
+    `site:glassdoor.com "${c}" interview process overview`,
+    `site:glassdoor.com "${c}" "${r}" interview experience`,
+    `site:teamblind.com "${c}" interview process rounds`,
+    `site:reddit.com "${c}" interview process rounds overview`,
+    `${c} ${r} interview rounds structure 2024 2025`,
+    // YouTube — interview process explainer videos
+    `site:youtube.com "${c}" interview process explained`,
+    `${c} interview process complete guide`,
   ];
 }
 
@@ -493,7 +460,7 @@ async function buildExternalResearch(company: string, role: string) {
   const youtubeSources = candidates.filter((source) => source.sourceType === "youtube_source");
   const extractCandidates = candidates
     .filter((source) => source.sourceType !== "youtube_source")
-    .slice(0, 50);
+    .slice(0, 20);
   const extractedMap = await tavilyExtract(extractCandidates.map((source) => source.url));
 
   const extractedSources: ExtractedSource[] = extractCandidates
