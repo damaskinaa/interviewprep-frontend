@@ -339,6 +339,7 @@ export default function Home() {
   const [practiceState, setPracticeState] = useState<PracticeState | null>(null);
   const [mockState, setMockState] = useState<MockState | null>(null);
   const practiceRef = useRef<HTMLDivElement | null>(null);
+  const generatingRef = useRef(false);
 
   useEffect(() => {
     const saved = localStorage.getItem("nailit_session");
@@ -522,10 +523,16 @@ export default function Home() {
 
   async function generateAnswersForQuestion(context: QuestionContext) {
     if (!session) return;
+    // Ref-based guard: synchronous check prevents double-calls even with async state lag
+    if (generatingRef.current) return;
+    generatingRef.current = true;
     const id = questionId(context.question, context.round_name);
     // Guard: don't fire if already loading or done
     const existing = answersByQuestion[id];
-    if (existing?.status === "loading" || existing?.status === "done") return;
+    if (existing?.status === "loading" || existing?.status === "done") {
+      generatingRef.current = false;
+      return;
+    }
     setError("");
     setAnswersByQuestion((current) => ({
       ...current,
@@ -562,6 +569,8 @@ export default function Home() {
         ...current,
         [id]: { ...(current[id] || { answers: [] }), status: "failed", error: message },
       }));
+    } finally {
+      generatingRef.current = false;
     }
   }
 
