@@ -2,6 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import posthog from "posthog-js";
+if (typeof window !== "undefined") {
+  posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY ?? "", {
+    api_host: "https://app.posthog.com",
+    capture_pageview: false,
+  });
+}
 
 type SessionMeta = {
   session_id: string;
@@ -463,7 +470,15 @@ export default function Home() {
           error: data.error || "",
         },
       }));
-      if (data.status === "done") return;
+      if (data.status === "done") {
+        if (moduleName === "prep_pack") {
+          posthog.capture("session_completed", {
+            company: session?.company_name,
+            tier: "free",
+          });
+        }
+        return;
+      }
       if (data.status === "failed") throw new Error(data.error || `${moduleName} failed.`);
     }
   }
@@ -627,6 +642,10 @@ export default function Home() {
   function startMockInterview() {
     const all = Object.values(questionContexts) as QuestionContext[];
     if (!all.length) return;
+    posthog.capture("paid_conversion", {
+      plan: "mock_interview",
+      source: "session_end",
+    });
     const firstQ = all[0];
     // Pre-load answers for first question if already generated
     const firstState = answersByQuestion[normalizeQuestion(firstQ.question)];
@@ -714,6 +733,11 @@ export default function Home() {
         score: typeof feedback.score_out_of_10 === "number" ? feedback.score_out_of_10 : undefined,
       };
       const newTurns = [...mockState.turns, newTurn];
+      if (newTurns.length === 3) {
+        posthog.capture("lua_three_rounds", {
+          company: session?.company_name,
+        });
+      }
       setMockState((s) => s ? { ...s, submitting: false, turns: newTurns } : s);
     } catch (err: unknown) {
       setMockState((s) => s ? { ...s, submitting: false, error: err instanceof Error ? err.message : "Feedback failed." } : s);
