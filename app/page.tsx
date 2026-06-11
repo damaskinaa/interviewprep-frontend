@@ -338,6 +338,8 @@ export default function Home() {
   const [answersByQuestion, setAnswersByQuestion] = useState<Record<string, QuestionAnswerState>>({});
   const [practiceState, setPracticeState] = useState<PracticeState | null>(null);
   const [mockState, setMockState] = useState<MockState | null>(null);
+  const [hint2Dismissed, setHint2Dismissed] = useState(false);
+  const [hint4Dismissed, setHint4Dismissed] = useState(false);
   const practiceRef = useRef<HTMLDivElement | null>(null);
   const generatingRef = useRef(false);
 
@@ -1371,37 +1373,87 @@ export default function Home() {
                 const state = modules[item.name];
                 const locked = moduleLocked(item);
                 const busy = state.status === "queued" || state.status === "running";
+                const prepPackDone = modules.prep_pack?.status === "done";
                 return (
-                  <article key={item.name} className="rounded-[1.5rem] border border-[#2a2a2a] bg-[#141414] p-5">
-                    <div className="flex items-start justify-between gap-3">
-                      <h2 className="text-xl font-semibold tracking-[-0.03em]">{item.title}</h2>
-                      <StatusBadge status={state.status} />
-                    </div>
-                    <p className="mt-3 min-h-[72px] text-sm leading-6 text-[#f5f0e8]/50">{item.description}</p>
-                    <div className="mt-5">
-                      <div className="flex items-center justify-between text-xs text-[#f5f0e8]/42">
-                        <span>{state.stage}</span>
-                        <span>{Math.round(state.progress || 0)}%</span>
+                  <div key={item.name} className="contents">
+                    <article className="rounded-[1.5rem] border border-[#2a2a2a] bg-[#141414] p-5">
+                      <div className="flex items-start justify-between gap-3">
+                        <h2 className="text-xl font-semibold tracking-[-0.03em]">{item.title}</h2>
+                        <StatusBadge status={state.status} />
                       </div>
-                      <div className="mt-2 h-2 overflow-hidden rounded-full bg-[#1e1e1e]">
-                        <div className="h-full bg-[#c9a96e] transition-all" style={{ width: `${Math.max(0, Math.min(100, state.progress || 0))}%` }} />
+                      <p className="mt-3 min-h-[72px] text-sm leading-6 text-[#f5f0e8]/50">{item.description}</p>
+                      <div className="mt-5">
+                        <div className="flex items-center justify-between text-xs text-[#f5f0e8]/42">
+                          <span>{state.stage}</span>
+                          <span>{Math.round(state.progress || 0)}%</span>
+                        </div>
+                        <div className="mt-2 h-2 overflow-hidden rounded-full bg-[#1e1e1e]">
+                          <div className="h-full bg-[#c9a96e] transition-all" style={{ width: `${Math.max(0, Math.min(100, state.progress || 0))}%` }} />
+                        </div>
                       </div>
-                    </div>
-                    <div className="mt-5 flex gap-3">
-                      <button
-                        disabled={locked || busy}
-                        onClick={() => runModule(item.name)}
-                        className="rounded-xl bg-[#c9a96e] px-4 py-3 text-sm font-bold text-[#0a0a0a] transition hover:bg-[#f5f0e8] disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        {busy ? "Running..." : item.button}
-                      </button>
-                      {state.status === "done" && (
-                        <button onClick={() => setActiveModule(item.name)} className="rounded-xl border border-[#2a2a2a] px-4 py-3 text-sm text-[#f5f0e8]/70 hover:border-[#c9a96e]/50">
-                          View Results
+                      <div className="mt-5 flex gap-3">
+                        <button
+                          disabled={locked || busy}
+                          onClick={() => runModule(item.name)}
+                          className="rounded-xl bg-[#c9a96e] px-4 py-3 text-sm font-bold text-[#0a0a0a] transition hover:bg-[#f5f0e8] disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          {busy ? "Running..." : item.button}
                         </button>
-                      )}
-                    </div>
-                  </article>
+                        {state.status === "done" && (
+                          <button onClick={() => setActiveModule(item.name)} className="rounded-xl border border-[#2a2a2a] px-4 py-3 text-sm text-[#f5f0e8]/70 hover:border-[#c9a96e]/50">
+                            View Results
+                          </button>
+                        )}
+                      </div>
+                    </article>
+
+                    {/* Hint: scary question after Module 2 (role_intelligence) */}
+                    {item.name === "role_intelligence" &&
+                      state.status === "done" &&
+                      !hint2Dismissed &&
+                      !prepPackDone && (() => {
+                        const r = state.result as Record<string, unknown> | null;
+                        const dangerZones = r?.danger_zones as {requirement?: string}[] | undefined;
+                        const questionSeeds = r?.question_seeds as {question?: string}[] | undefined;
+                        const text = dangerZones?.[0]?.requirement || questionSeeds?.[0]?.question;
+                        if (!text) return null;
+                        return (
+                          <div
+                            onClick={() => setHint2Dismissed(true)}
+                            className="activation-hint cursor-pointer rounded-[1.5rem] border border-amber-600/40 bg-amber-950/20 p-5"
+                          >
+                            <p className="hint-label mb-2 text-xs font-semibold uppercase tracking-widest text-amber-500/70">
+                              Question you may not have prepared for
+                            </p>
+                            <p className="hint-text text-sm leading-6 text-[#f5f0e8]/80 line-clamp-3">{text}</p>
+                            <p className="mt-3 text-xs text-[#f5f0e8]/30">Click to dismiss</p>
+                          </div>
+                        );
+                      })()}
+
+                    {/* Hint: gap repair script after Module 4 (gap_map) */}
+                    {item.name === "gap_map" &&
+                      state.status === "done" &&
+                      !hint4Dismissed &&
+                      !prepPackDone && (() => {
+                        const r = state.result as Record<string, unknown> | null;
+                        const repairScripts = r?.repair_scripts as {verbatim_repair_answer?: string}[] | undefined;
+                        const text = repairScripts?.[0]?.verbatim_repair_answer;
+                        if (!text) return null;
+                        return (
+                          <div
+                            onClick={() => setHint4Dismissed(true)}
+                            className="activation-hint cursor-pointer rounded-[1.5rem] border border-amber-600/40 bg-amber-950/20 p-5"
+                          >
+                            <p className="hint-label mb-2 text-xs font-semibold uppercase tracking-widest text-amber-500/70">
+                              Your biggest gap — what to say
+                            </p>
+                            <p className="hint-text text-sm leading-6 text-[#f5f0e8]/80 line-clamp-3">{text}</p>
+                            <p className="mt-3 text-xs text-[#f5f0e8]/30">Click to dismiss</p>
+                          </div>
+                        );
+                      })()}
+                  </div>
                 );
               })}
               <article className="rounded-[1.5rem] border border-[#2a2a2a] bg-[#141414] p-5">
