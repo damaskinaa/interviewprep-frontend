@@ -17,6 +17,7 @@ type BackendResponse = {
   ok: boolean;
   status: number;
   text: string;
+  headers: Headers;
 };
 
 function getValue(response: DaytonaPreviewResponse, key: "url" | "token") {
@@ -110,5 +111,6 @@ export async function callBackend(
     ok: response.ok,
     status: response.status,
     text: await response.text(),
+    headers: response.headers,
   };
 }
