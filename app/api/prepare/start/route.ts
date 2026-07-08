@@ -262,7 +262,7 @@ function researchQueries(company: string, role: string) {
   ];
 }
 
-async function tavilySearch(query: string, company: string): Promise<SearchResult[]> {
+async function tavilySearch(query: string): Promise<SearchResult[]> {
   const key = process.env.TAVILY_API_KEY;
   if (!key) return [];
 
@@ -449,7 +449,7 @@ function extractReportedQuestions(sources: ExtractedSource[]): string {
 async function buildExternalResearch(company: string, role: string) {
   const started = Date.now();
   const queries = researchQueries(company, role);
-  const searchBatch = Promise.all(queries.map((query) => tavilySearch(query, company)));
+  const searchBatch = Promise.all(queries.map((query) => tavilySearch(query)));
   const settled = await Promise.race([
     searchBatch,
     new Promise<SearchResult[][]>((resolve) => setTimeout(() => resolve([]), TAVILY_SEARCH_TIMEOUT_MS)),

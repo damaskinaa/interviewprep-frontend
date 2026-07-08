@@ -750,10 +750,6 @@ export default function Home() {
     mockAdvanceToQuestion(next);
   }
 
-  function mockRetry() {
-    setMockState((s) => s ? { ...s, inputText: "" } : s);
-  }
-
   function renderQuestionBankSection(section: string, index: number) {
     const parsed = parseQuestionBlocks(section);
     return (
@@ -916,7 +912,7 @@ export default function Home() {
                         {/* Top 1% answers */}
                         {practiceState.feedback.top_1_percent_answers && (
                           <div className="rounded-xl border border-[#c9a96e]/25 bg-[#c9a96e]/5 p-4 space-y-4">
-                            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#c9a96e]">Lua's top 1% versions</p>
+                            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#c9a96e]">Lua&apos;s top 1% versions</p>
                             {Object.entries(practiceState.feedback.top_1_percent_answers).map(([key, val]) => val && (
                               <div key={key}>
                                 <p className="text-xs font-semibold text-[#f5f0e8]/50 mb-1 capitalize">{key.replace(/_/g, " ")}</p>
@@ -934,7 +930,7 @@ export default function Home() {
                             {practiceState.feedback.voice_and_delivery_coaching.tone && <p className="text-sm text-[#f5f0e8]/70"><span className="font-semibold text-[#f5f0e8]/90">Tone: </span>{practiceState.feedback.voice_and_delivery_coaching.tone}</p>}
                             {practiceState.feedback.voice_and_delivery_coaching.confidence && <p className="text-sm text-[#f5f0e8]/70"><span className="font-semibold text-[#f5f0e8]/90">Confidence: </span>{practiceState.feedback.voice_and_delivery_coaching.confidence}</p>}
                             {practiceState.feedback.voice_and_delivery_coaching.sentence_to_practise && (
-                              <p className="mt-2 rounded-lg border border-[#c9a96e]/20 bg-[#c9a96e]/5 p-3 text-sm italic text-[#f2dfb8]">"{practiceState.feedback.voice_and_delivery_coaching.sentence_to_practise}"</p>
+                              <p className="mt-2 rounded-lg border border-[#c9a96e]/20 bg-[#c9a96e]/5 p-3 text-sm italic text-[#f2dfb8]">&quot;{practiceState.feedback.voice_and_delivery_coaching.sentence_to_practise}&quot;</p>
                             )}
                           </div>
                         )}
@@ -1266,7 +1262,7 @@ export default function Home() {
                               {currentTurn.feedback.voice_and_delivery_coaching.tone && <p className="text-sm text-[#f5f0e8]/70"><span className="font-semibold text-[#f5f0e8]/90">Tone: </span>{currentTurn.feedback.voice_and_delivery_coaching.tone}</p>}
                               {currentTurn.feedback.voice_and_delivery_coaching.confidence && <p className="text-sm text-[#f5f0e8]/70"><span className="font-semibold text-[#f5f0e8]/90">Confidence: </span>{currentTurn.feedback.voice_and_delivery_coaching.confidence}</p>}
                               {currentTurn.feedback.voice_and_delivery_coaching.sentence_to_practise && (
-                                <p className="mt-2 rounded-lg border border-[#c9a96e]/20 bg-[#c9a96e]/5 p-3 text-sm italic text-[#f2dfb8]">"{currentTurn.feedback.voice_and_delivery_coaching.sentence_to_practise}"</p>
+                                <p className="mt-2 rounded-lg border border-[#c9a96e]/20 bg-[#c9a96e]/5 p-3 text-sm italic text-[#f2dfb8]">&quot;{currentTurn.feedback.voice_and_delivery_coaching.sentence_to_practise}&quot;</p>
                               )}
                             </div>
                           )}

@@ -4,6 +4,29 @@ export const runtime = "nodejs";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
+type PdfParseResult = {
+  text?: string;
+};
+
+type PdfParseFn = (buffer: Buffer) => Promise<PdfParseResult>;
+
+type PdfParseModule = {
+  default?: PdfParseFn;
+} & PdfParseFn;
+
+type MammothExtractRawText = (input: { buffer: Buffer }) => Promise<{ value?: string }>;
+
+type MammothModule = {
+  default?: {
+    extractRawText: MammothExtractRawText;
+  };
+  extractRawText?: MammothExtractRawText;
+};
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Unknown error";
+}
+
 function normalizeText(text: string) {
   const headingWords = new Set([
     "SUMMARY",
@@ -94,14 +117,18 @@ async function extractFileText(file: File) {
   const buffer = Buffer.from(await file.arrayBuffer());
 
   if (name.endsWith(".pdf")) {
-    const pdfParseModule: any = await import("pdf-parse");
-    const pdfParse = pdfParseModule.default || pdfParseModule;
+    const pdfParseModule = (await import("pdf-parse")) as unknown as PdfParseModule;
+    const pdfParse: PdfParseFn = pdfParseModule.default || pdfParseModule;
     const data = await pdfParse(buffer);
     return normalizeText(data.text || "");
   }
 
   if (name.endsWith(".docx")) {
-    const mammoth: any = await import("mammoth");
+    const mammothModule = (await import("mammoth")) as unknown as MammothModule;
+    const mammoth = mammothModule.default || mammothModule;
+    if (!mammoth.extractRawText) {
+      throw new Error("DOCX parser is unavailable.");
+    }
     const data = await mammoth.extractRawText({ buffer });
     return normalizeText(data.value || "");
   }
@@ -144,11 +171,11 @@ export async function POST(request: Request) {
       text,
       warning,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     return NextResponse.json(
       {
         error: "Could not read file.",
-        message: err?.message || "Unknown error",
+        message: getErrorMessage(err),
       },
       { status: 500 }
     );
